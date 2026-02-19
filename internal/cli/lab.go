@@ -29,7 +29,6 @@ func newLabCreateCmd() *cobra.Command {
 		Use:   "create",
 		Short: "Create a lab environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = nodes
 			return errors.New("not implemented")
 		},
 	}
@@ -50,7 +49,6 @@ func newLabApplyCmd() *cobra.Command {
 		Use:   "apply",
 		Short: "Apply impairments to a node",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _, _, _, _ = node, delay, loss, jitter, bw
 			return errors.New("not implemented")
 		},
 	}
