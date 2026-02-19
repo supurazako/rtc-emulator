@@ -22,7 +22,6 @@ Thanks for your interest in contributing to `rtc-emulator`.
 By contributing to this repository, you agree that your contributions are
 provided under the [MIT License](LICENSE).
 
-## Code of Conduct (Planned)
+## Code of Conduct
 
-A dedicated Code of Conduct will be added in a future update.
-Until then, please communicate respectfully and constructively.
+Please review our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
