@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"fmt"
+	"errors"
 
 	"github.com/spf13/cobra"
 )
@@ -30,8 +30,7 @@ func newLabCreateCmd() *cobra.Command {
 		Short: "Create a lab environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = nodes
-			fmt.Println("not implemented")
-			return nil
+			return errors.New("not implemented")
 		},
 	}
 
@@ -52,8 +51,7 @@ func newLabApplyCmd() *cobra.Command {
 		Short: "Apply impairments to a node",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, _, _, _, _ = node, delay, loss, jitter, bw
-			fmt.Println("not implemented")
-			return nil
+			return errors.New("not implemented")
 		},
 	}
 
@@ -71,8 +69,7 @@ func newLabShowCmd() *cobra.Command {
 		Use:   "show",
 		Short: "Show current lab state",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("not implemented")
-			return nil
+			return errors.New("not implemented")
 		},
 	}
 }
@@ -82,9 +79,7 @@ func newLabDestroyCmd() *cobra.Command {
 		Use:   "destroy",
 		Short: "Destroy lab environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("not implemented")
-			return nil
+			return errors.New("not implemented")
 		},
 	}
 }
-

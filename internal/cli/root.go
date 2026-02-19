@@ -8,12 +8,13 @@ func Execute() error {
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "rtc-emulator",
-		Short: "CLI tool to emulate network impairments for WebRTC experiments",
+		Use:           "rtc-emulator",
+		Short:         "CLI tool to emulate network impairments for WebRTC experiments",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 	}
 
 	cmd.AddCommand(newLabCmd())
 
 	return cmd
 }
-
