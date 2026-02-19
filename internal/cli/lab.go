@@ -58,6 +58,7 @@ func newLabApplyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&loss, "loss", "", "packet loss setting")
 	cmd.Flags().StringVar(&jitter, "jitter", "", "jitter setting")
 	cmd.Flags().StringVar(&bw, "bw", "", "bandwidth setting")
+	_ = cmd.MarkFlagRequired("node")
 
 	return cmd
 }
