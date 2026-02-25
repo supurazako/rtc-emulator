@@ -110,3 +110,7 @@ sudo rtc-emulator lab destroy
 ```
 
 Both commands should succeed again.
+
+## See also
+
+- [Browser 3-Pane Demo (Remote Linux over SSH)](../demo/01-browser-three-pane-remote-linux.md)

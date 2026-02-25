@@ -85,3 +85,7 @@ Confirm no leftovers:
 sudo ip netns list
 sudo ip link show rtcemu0
 ```
+
+## See also
+
+- [Browser 3-Pane Demo (Remote Linux over SSH)](../demo/01-browser-three-pane-remote-linux.md)

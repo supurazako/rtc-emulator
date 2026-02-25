@@ -19,7 +19,13 @@ rtc-emulator lab destroy
 - Common
   - [01 Basic Operations](examples/common/01-basic-operations.md)
   - [02 Recovery: Missing State](examples/common/02-recovery-missing-state.md)
+- Demo
+  - [01 Browser 3-Pane Demo (Remote Linux over SSH)](examples/demo/01-browser-three-pane-remote-linux.md)
 - Pion
   - [01 P2P Operations](examples/pion/01-p2p-operations.md)
 - ion-sfu
   - [01 SFU Operations](examples/ion-sfu/01-sfu-operations.md)
+
+Note: runtime control commands (`lab create/apply/show/destroy`) require Linux.
+Use macOS as a browser/presentation client via SSH tunneling.
+For a bundled starter setup, use `examples/demo/compose.yml` and `examples/demo/ui/`.
