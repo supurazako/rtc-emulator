@@ -66,7 +66,33 @@ func newLabApplyCmd() *cobra.Command {
 		Use:   "apply",
 		Short: "Apply impairments to a node",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("not implemented")
+			result, err := lab.Apply(context.Background(), lab.ApplyOptions{
+				Node:   node,
+				Delay:  delay,
+				Loss:   loss,
+				Jitter: jitter,
+				BW:     bw,
+			})
+			if err != nil {
+				return err
+			}
+
+			display := func(v string) string {
+				if v == "" {
+					return "-"
+				}
+				return v
+			}
+			fmt.Fprintf(
+				cmd.OutOrStdout(),
+				"applied node=%s delay=%s loss=%s jitter=%s bw=%s\n",
+				result.Node,
+				display(result.Delay),
+				display(result.Loss),
+				display(result.Jitter),
+				display(result.BW),
+			)
+			return nil
 		},
 	}
 
