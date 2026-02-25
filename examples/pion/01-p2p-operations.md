@@ -65,6 +65,14 @@ sudo ip netns exec node2 tc qdisc show dev eth0
 sudo ip netns exec node3 tc qdisc show dev eth0
 ```
 
+Check summarized lab state with:
+
+```bash
+sudo rtc-emulator lab show
+```
+
+Use `lab show` output to compare node-by-node impairment differences.
+
 ## 5. Cleanup
 
 ```bash
