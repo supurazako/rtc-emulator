@@ -63,6 +63,14 @@ sudo ip netns exec node1 tc qdisc show dev eth0
 sudo ip netns exec node2 tc qdisc show dev eth0
 ```
 
+Check summarized lab state with:
+
+```bash
+sudo rtc-emulator lab show
+```
+
+Use `lab show` output to compare publisher/subscriber impairment differences.
+
 Compare:
 
 - publisher-side degradation impact

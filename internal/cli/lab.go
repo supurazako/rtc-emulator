@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -111,7 +110,39 @@ func newLabShowCmd() *cobra.Command {
 		Use:   "show",
 		Short: "Show current lab state",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("not implemented")
+			result, err := lab.Show(context.Background())
+			if err != nil {
+				return err
+			}
+
+			fmt.Fprintf(
+				cmd.OutOrStdout(),
+				"bridge=%s subnet=%s nodes=%d\n",
+				result.Bridge,
+				result.Subnet,
+				len(result.Nodes),
+			)
+
+			display := func(v string) string {
+				if v == "" {
+					return "-"
+				}
+				return v
+			}
+			for _, node := range result.Nodes {
+				fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"node=%s iface=%s delay=%s jitter=%s loss=%s bw=%s raw=%q\n",
+					node.Name,
+					node.Interface,
+					display(node.Delay),
+					display(node.Jitter),
+					display(node.Loss),
+					display(node.BW),
+					node.RawQDisc,
+				)
+			}
+			return nil
 		},
 	}
 }

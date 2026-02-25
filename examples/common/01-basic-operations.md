@@ -58,7 +58,28 @@ Notes:
 - `--jitter` requires `--delay`
 - re-applying updates existing settings cleanly on that node
 
-## 4. Destroy the lab
+## 4. Show current lab state
+
+Check the current bridge/node settings in one command:
+
+```bash
+sudo rtc-emulator lab show
+```
+
+Checkpoints:
+
+- output includes `bridge=... subnet=... nodes=...`
+- each node line includes `iface=eth0` and impairment values (`delay/loss/jitter/bw`)
+
+Expected output example:
+
+```text
+bridge=rtcemu0 subnet=10.200.0.0/24 nodes=2
+node=node1 iface=eth0 delay=50ms jitter=10ms loss=- bw=- raw="qdisc netem 8001: root refcnt 2 limit 1000 delay 50ms 10ms"
+node=node2 iface=eth0 delay=- jitter=- loss=2% bw=1mbit raw="qdisc netem 8001: root refcnt 2 limit 1000 loss 2% rate 1mbit"
+```
+
+## 5. Destroy the lab
 
 ```bash
 sudo rtc-emulator lab destroy
@@ -69,7 +90,7 @@ Checkpoints:
 - Output includes `destroyed bridge=true`
 - Output includes `state-missing-fallback=false` in normal flow
 
-## 5. Verify cleanup
+## 6. Verify cleanup
 
 ```bash
 sudo ip link show rtcemu0
@@ -81,7 +102,7 @@ Checkpoints:
 - `rtcemu0` no longer exists
 - `node1` and `node2` are removed
 
-## 6. Re-create to confirm no leftovers
+## 7. Re-create to confirm no leftovers
 
 ```bash
 sudo rtc-emulator lab create --nodes 2
