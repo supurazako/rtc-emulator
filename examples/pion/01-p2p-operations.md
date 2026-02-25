@@ -7,7 +7,7 @@ The focus is operational verification with 3 participants.
 
 - Linux host
 - Root privileges (or `sudo`)
-- Installed commands: `ip`, `sysctl`, `iptables`, `ping`
+- Installed commands: `ip`, `sysctl`, `iptables`, `ping`, `tc`
 - Go toolchain
 - A runnable Pion peer app (your own app or sample in your environment)
 
@@ -47,10 +47,23 @@ Operational note:
 
 - with mesh-style P2P, CPU and upstream usage increase with participant count
 
-## 4. Optional impairment experiments
+## 4. Apply impairment experiments
 
-When `lab apply` is available in your workflow, apply different conditions per node
-and compare effects participant-by-participant.
+Apply different conditions per participant node:
+
+```bash
+sudo rtc-emulator lab apply --node node1 --delay 120ms --jitter 20ms
+sudo rtc-emulator lab apply --node node2 --loss 1.5%
+sudo rtc-emulator lab apply --node node3 --bw 800kbit
+```
+
+Verify applied qdisc state:
+
+```bash
+sudo ip netns exec node1 tc qdisc show dev eth0
+sudo ip netns exec node2 tc qdisc show dev eth0
+sudo ip netns exec node3 tc qdisc show dev eth0
+```
 
 ## 5. Cleanup
 
