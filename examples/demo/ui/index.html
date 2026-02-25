@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rtc-emulator Demo: Good / Medium / Bad</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <h1>rtc-emulator Demo</h1>
+      <div class="controls">
+        <label>
+          Room
+          <input id="room" type="text" value="rtcemu-demo" />
+        </label>
+        <label>
+          SFU WS
+          <input id="ws" type="text" value="ws://localhost:7000/ws" />
+        </label>
+        <button id="join">Join</button>
+        <button id="leave" disabled>Leave</button>
+      </div>
+      <p class="hint">
+        This is a minimal demo UI. Run publisher/subscriber clients in lab namespaces,
+        then compare panes while checking <code>rtc-emulator lab show</code>.
+      </p>
+      <p id="status" class="status">Status: idle</p>
+    </header>
+
+    <main class="grid">
+      <section class="pane good">
+        <h2>Good (node1)</h2>
+        <video id="good-video" autoplay playsinline muted></video>
+        <div class="stats">
+          <span id="good-rtt">RTT: -</span>
+          <span id="good-bitrate">Bitrate: -</span>
+        </div>
+      </section>
+
+      <section class="pane medium">
+        <h2>Medium (node2)</h2>
+        <video id="medium-video" autoplay playsinline muted></video>
+        <div class="stats">
+          <span id="medium-rtt">RTT: -</span>
+          <span id="medium-bitrate">Bitrate: -</span>
+        </div>
+      </section>
+
+      <section class="pane bad">
+        <h2>Bad (node3)</h2>
+        <video id="bad-video" autoplay playsinline muted></video>
+        <div class="stats">
+          <span id="bad-rtt">RTT: -</span>
+          <span id="bad-bitrate">Bitrate: -</span>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p>
+        If your environment does not provide an SFU client integration yet, this page can
+        still be used as a 3-pane layout shell while you observe command outputs.
+      </p>
+    </footer>
+
+    <script src="https://unpkg.com/ion-sdk-js@1.11.2/dist/ion-sdk.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
