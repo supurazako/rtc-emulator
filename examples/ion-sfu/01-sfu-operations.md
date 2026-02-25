@@ -6,7 +6,7 @@ This guide shows an SFU-based experiment flow using `rtc-emulator` and `ion-sfu`
 
 - Linux host
 - Root privileges (or `sudo`)
-- Installed commands: `ip`, `sysctl`, `iptables`, `ping`
+- Installed commands: `ip`, `sysctl`, `iptables`, `ping`, `tc`
 - Docker and Docker Compose
 - A client app that can publish/subscribe through ion-sfu
 
@@ -49,7 +49,21 @@ Validation points:
 
 ## 4. Observe behavior under network conditions
 
-Use your impairment workflow to compare:
+Apply and compare publisher/subscriber conditions:
+
+```bash
+sudo rtc-emulator lab apply --node node1 --bw 1mbit --delay 40ms
+sudo rtc-emulator lab apply --node node2 --loss 2%
+```
+
+Verify applied qdisc state:
+
+```bash
+sudo ip netns exec node1 tc qdisc show dev eth0
+sudo ip netns exec node2 tc qdisc show dev eth0
+```
+
+Compare:
 
 - publisher-side degradation impact
 - subscriber-side degradation impact

@@ -6,7 +6,7 @@ This guide shows the basic `lab create` and `lab destroy` cycle on Linux.
 
 - Linux host
 - Root privileges (or `sudo`)
-- Installed commands: `ip`, `sysctl`, `iptables`, `ping`
+- Installed commands: `ip`, `sysctl`, `iptables`, `ping`, `tc`
 
 ## 1. Create a lab
 
@@ -36,7 +36,29 @@ Checkpoints:
 - `rtcemu0` exists
 - Ping to `10.200.0.1` succeeds
 
-## 3. Destroy the lab
+## 3. Apply per-node impairments
+
+Apply different settings to each node:
+
+```bash
+sudo rtc-emulator lab apply --node node1 --delay 80ms
+sudo rtc-emulator lab apply --node node2 --loss 2% --bw 1mbit
+sudo rtc-emulator lab apply --node node1 --delay 50ms --jitter 10ms
+```
+
+Verify the applied qdisc state per node:
+
+```bash
+sudo ip netns exec node1 tc qdisc show dev eth0
+sudo ip netns exec node2 tc qdisc show dev eth0
+```
+
+Notes:
+
+- `--jitter` requires `--delay`
+- re-applying updates existing settings cleanly on that node
+
+## 4. Destroy the lab
 
 ```bash
 sudo rtc-emulator lab destroy
@@ -47,7 +69,7 @@ Checkpoints:
 - Output includes `destroyed bridge=true`
 - Output includes `state-missing-fallback=false` in normal flow
 
-## 4. Verify cleanup
+## 5. Verify cleanup
 
 ```bash
 sudo ip link show rtcemu0
@@ -59,7 +81,7 @@ Checkpoints:
 - `rtcemu0` no longer exists
 - `node1` and `node2` are removed
 
-## 5. Re-create to confirm no leftovers
+## 6. Re-create to confirm no leftovers
 
 ```bash
 sudo rtc-emulator lab create --nodes 2
