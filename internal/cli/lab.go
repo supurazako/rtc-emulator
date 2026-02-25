@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"context"
 	"errors"
+	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/supurazako/rtc-emulator/internal/lab"
 )
 
 func newLabCmd() *cobra.Command {
@@ -29,7 +32,21 @@ func newLabCreateCmd() *cobra.Command {
 		Use:   "create",
 		Short: "Create a lab environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("not implemented")
+			result, err := lab.Create(context.Background(), lab.CreateOptions{Nodes: nodes})
+			if err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "created bridge=%s nodes=%d\n", result.Bridge, len(result.Nodes))
+			for _, node := range result.Nodes {
+				fmt.Fprintf(cmd.OutOrStdout(), "- %s ip=%s\n", node.Name, node.IP)
+			}
+			if result.InternetReachable {
+				fmt.Fprintln(cmd.OutOrStdout(), "internet-check=ok")
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "internet-check=skipped-or-unreachable (host bridge connectivity is confirmed)")
+			}
+			return nil
 		},
 	}
 
@@ -78,7 +95,18 @@ func newLabDestroyCmd() *cobra.Command {
 		Use:   "destroy",
 		Short: "Destroy lab environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("not implemented")
+			result, err := lab.Destroy(context.Background())
+			if err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "destroyed bridge=%t nodes=%d\n", result.BridgeDeleted, len(result.NodesDeleted))
+			for _, node := range result.NodesDeleted {
+				fmt.Fprintf(cmd.OutOrStdout(), "- %s\n", node)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "state-missing-fallback=%t\n", result.StateMissingFallback)
+			fmt.Fprintf(cmd.OutOrStdout(), "ip-forward-restored=%t\n", result.IPForwardRestored)
+			return nil
 		},
 	}
 }
