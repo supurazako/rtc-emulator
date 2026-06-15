@@ -23,6 +23,15 @@ type ApplyResult struct {
 	BW     string
 }
 
+type ClearOptions struct {
+	Node string
+}
+
+type ClearResult struct {
+	Node    string
+	Cleared bool
+}
+
 func Apply(ctx context.Context, opts ApplyOptions) (*ApplyResult, error) {
 	return applyWithDeps(ctx, opts, defaultCreateDeps())
 }
@@ -53,27 +62,11 @@ func applyWithDeps(ctx context.Context, opts ApplyOptions, deps createDeps) (*Ap
 		return nil, errors.New("jitter requires delay")
 	}
 
-	if deps.loadState == nil {
-		return nil, errors.New("lab state loader is not configured")
-	}
-	state, err := deps.loadState(ctx)
-	if errors.Is(err, ErrStateNotFound) {
-		return nil, errors.New("lab state not found: run `rtc-emulator lab create` first")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to load lab state: %w", err)
-	}
-	if !containsString(state.Nodes, opts.Node) {
-		return nil, fmt.Errorf("node %q is not managed by current lab", opts.Node)
-	}
-
-	namespaces, err := listNamespaces(ctx, deps.exec)
+	node, err := validateImpairmentTarget(ctx, deps, opts.Node)
 	if err != nil {
 		return nil, err
 	}
-	if !containsString(namespaces, opts.Node) {
-		return nil, fmt.Errorf("node %q namespace not found", opts.Node)
-	}
+	opts.Node = node
 
 	args := []string{
 		"netns", "exec", opts.Node,
@@ -103,6 +96,82 @@ func applyWithDeps(ctx context.Context, opts ApplyOptions, deps createDeps) (*Ap
 		Jitter: opts.Jitter,
 		BW:     opts.BW,
 	}, nil
+}
+
+func Clear(ctx context.Context, opts ClearOptions) (*ClearResult, error) {
+	return clearWithDeps(ctx, opts, defaultCreateDeps())
+}
+
+func clearWithDeps(ctx context.Context, opts ClearOptions, deps createDeps) (*ClearResult, error) {
+	deps = fillCreateDeps(deps)
+
+	if deps.goos != "linux" {
+		return nil, fmt.Errorf("lab impair clear is supported only on linux: got %s", deps.goos)
+	}
+	if !deps.isRoot() {
+		return nil, errors.New("lab impair clear requires root privileges")
+	}
+	for _, cmd := range []string{"ip", "tc"} {
+		if _, err := deps.findPath(cmd); err != nil {
+			return nil, fmt.Errorf("required command %q not found: %w", cmd, err)
+		}
+	}
+
+	node, err := validateImpairmentTarget(ctx, deps, opts.Node)
+	if err != nil {
+		return nil, err
+	}
+
+	err = deps.exec.Run(ctx, "ip", "netns", "exec", node, "tc", "qdisc", "del", "dev", "eth0", "root")
+	if err != nil {
+		if isQdiscMissingError(err) {
+			return &ClearResult{Node: node, Cleared: false}, nil
+		}
+		return nil, fmt.Errorf("failed to clear impairments from %s: %w", node, err)
+	}
+
+	return &ClearResult{Node: node, Cleared: true}, nil
+}
+
+func validateImpairmentTarget(ctx context.Context, deps createDeps, node string) (string, error) {
+	node = strings.TrimSpace(node)
+	if node == "" {
+		return "", errors.New("node is required")
+	}
+
+	if deps.loadState == nil {
+		return "", errors.New("lab state loader is not configured")
+	}
+	state, err := deps.loadState(ctx)
+	if errors.Is(err, ErrStateNotFound) {
+		return "", errors.New("lab state not found: run `rtc-emulator lab create` first")
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to load lab state: %w", err)
+	}
+	if !containsString(state.Nodes, node) {
+		return "", fmt.Errorf("node %q is not managed by current lab", node)
+	}
+
+	namespaces, err := listNamespaces(ctx, deps.exec)
+	if err != nil {
+		return "", err
+	}
+	if !containsString(namespaces, node) {
+		return "", fmt.Errorf("node %q namespace not found", node)
+	}
+
+	return node, nil
+}
+
+func isQdiscMissingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such file or directory") ||
+		strings.Contains(msg, "cannot delete qdisc with handle of zero") ||
+		strings.Contains(msg, "no qdisc")
 }
 
 func containsString(items []string, target string) bool {

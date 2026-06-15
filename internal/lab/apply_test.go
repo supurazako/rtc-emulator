@@ -229,3 +229,159 @@ func TestApplyWithDeps_ReapplyUsesReplace(t *testing.T) {
 		t.Fatalf("missing second replace command, calls=%v", ex.calls)
 	}
 }
+
+func TestClearWithDeps_RequireLinux(t *testing.T) {
+	ex := &fakeExecutor{}
+	_, err := clearWithDeps(context.Background(), ClearOptions{
+		Node: "node1",
+	}, createDeps{
+		exec:     ex,
+		goos:     "darwin",
+		isRoot:   func() bool { return true },
+		findPath: func(string) (string, error) { return "/bin/x", nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "only on linux") {
+		t.Fatalf("expected linux-only error, got: %v", err)
+	}
+}
+
+func TestClearWithDeps_RequireRoot(t *testing.T) {
+	ex := &fakeExecutor{}
+	_, err := clearWithDeps(context.Background(), ClearOptions{
+		Node: "node1",
+	}, createDeps{
+		exec:     ex,
+		goos:     "linux",
+		isRoot:   func() bool { return false },
+		findPath: func(string) (string, error) { return "/bin/x", nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires root privileges") {
+		t.Fatalf("expected root requirement error, got: %v", err)
+	}
+}
+
+func TestClearWithDeps_StateNotFound(t *testing.T) {
+	ex := &fakeExecutor{}
+	_, err := clearWithDeps(context.Background(), ClearOptions{
+		Node: "node1",
+	}, createDeps{
+		exec:     ex,
+		goos:     "linux",
+		isRoot:   func() bool { return true },
+		findPath: func(string) (string, error) { return "/bin/x", nil },
+		loadState: func(context.Context) (*LabState, error) {
+			return nil, ErrStateNotFound
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "lab state not found") {
+		t.Fatalf("expected state-not-found error, got: %v", err)
+	}
+}
+
+func TestClearWithDeps_NodeNotManaged(t *testing.T) {
+	ex := &fakeExecutor{}
+	_, err := clearWithDeps(context.Background(), ClearOptions{
+		Node: "node9",
+	}, createDeps{
+		exec:     ex,
+		goos:     "linux",
+		isRoot:   func() bool { return true },
+		findPath: func(string) (string, error) { return "/bin/x", nil },
+		loadState: func(context.Context) (*LabState, error) {
+			return &LabState{Nodes: []string{"node1", "node2"}}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "is not managed by current lab") {
+		t.Fatalf("expected unmanaged-node error, got: %v", err)
+	}
+}
+
+func TestClearWithDeps_NodeNamespaceNotFound(t *testing.T) {
+	ex := &fakeExecutor{
+		outputFn: func(name string, args ...string) (string, error) {
+			if callKey(name, args...) == "ip netns list" {
+				return "node2\n", nil
+			}
+			return "", nil
+		},
+	}
+	_, err := clearWithDeps(context.Background(), ClearOptions{
+		Node: "node1",
+	}, createDeps{
+		exec:     ex,
+		goos:     "linux",
+		isRoot:   func() bool { return true },
+		findPath: func(string) (string, error) { return "/bin/x", nil },
+		loadState: func(context.Context) (*LabState, error) {
+			return &LabState{Nodes: []string{"node1"}}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "namespace not found") {
+		t.Fatalf("expected namespace-not-found error, got: %v", err)
+	}
+}
+
+func TestClearWithDeps_Success(t *testing.T) {
+	ex := &fakeExecutor{
+		outputFn: func(name string, args ...string) (string, error) {
+			if callKey(name, args...) == "ip netns list" {
+				return "node1\n", nil
+			}
+			return "", nil
+		},
+	}
+	got, err := clearWithDeps(context.Background(), ClearOptions{
+		Node: "node1",
+	}, createDeps{
+		exec:     ex,
+		goos:     "linux",
+		isRoot:   func() bool { return true },
+		findPath: func(string) (string, error) { return "/bin/x", nil },
+		loadState: func(context.Context) (*LabState, error) {
+			return &LabState{Nodes: []string{"node1"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Node != "node1" || !got.Cleared {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	if !hasCall(ex.calls, "ip netns exec node1 tc qdisc del dev eth0 root") {
+		t.Fatalf("missing del command, calls=%v", ex.calls)
+	}
+}
+
+func TestClearWithDeps_QdiscMissingSucceeds(t *testing.T) {
+	ex := &fakeExecutor{
+		runFn: func(name string, args ...string) error {
+			if callKey(name, args...) == "ip netns exec node1 tc qdisc del dev eth0 root" {
+				return errors.New("RTNETLINK answers: No such file or directory")
+			}
+			return nil
+		},
+		outputFn: func(name string, args ...string) (string, error) {
+			if callKey(name, args...) == "ip netns list" {
+				return "node1\n", nil
+			}
+			return "", nil
+		},
+	}
+	got, err := clearWithDeps(context.Background(), ClearOptions{
+		Node: "node1",
+	}, createDeps{
+		exec:     ex,
+		goos:     "linux",
+		isRoot:   func() bool { return true },
+		findPath: func(string) (string, error) { return "/bin/x", nil },
+		loadState: func(context.Context) (*LabState, error) {
+			return &LabState{Nodes: []string{"node1"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Node != "node1" || got.Cleared {
+		t.Fatalf("expected absent qdisc result, got: %+v", got)
+	}
+}
