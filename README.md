@@ -23,3 +23,8 @@ rtc-emulator lab destroy
   - [01 P2P Operations](examples/pion/01-p2p-operations.md)
 - ion-sfu
   - [01 SFU Operations](examples/ion-sfu/01-sfu-operations.md)
+
+### Project Documents
+
+- [Scope](docs/SCOPE.md)
+- [Development Roadmap](docs/ROADMAP.md)
