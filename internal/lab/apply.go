@@ -39,16 +39,8 @@ func Apply(ctx context.Context, opts ApplyOptions) (*ApplyResult, error) {
 func applyWithDeps(ctx context.Context, opts ApplyOptions, deps createDeps) (*ApplyResult, error) {
 	deps = fillCreateDeps(deps)
 
-	if deps.goos != "linux" {
-		return nil, fmt.Errorf("lab apply is supported only on linux: got %s", deps.goos)
-	}
-	if !deps.isRoot() {
-		return nil, errors.New("lab apply requires root privileges")
-	}
-	for _, cmd := range []string{"ip", "tc"} {
-		if _, err := deps.findPath(cmd); err != nil {
-			return nil, fmt.Errorf("required command %q not found: %w", cmd, err)
-		}
+	if err := validateImpairmentEnvironment(deps, "lab apply"); err != nil {
+		return nil, err
 	}
 
 	opts.Node = strings.TrimSpace(opts.Node)
@@ -105,16 +97,8 @@ func Clear(ctx context.Context, opts ClearOptions) (*ClearResult, error) {
 func clearWithDeps(ctx context.Context, opts ClearOptions, deps createDeps) (*ClearResult, error) {
 	deps = fillCreateDeps(deps)
 
-	if deps.goos != "linux" {
-		return nil, fmt.Errorf("lab impair clear is supported only on linux: got %s", deps.goos)
-	}
-	if !deps.isRoot() {
-		return nil, errors.New("lab impair clear requires root privileges")
-	}
-	for _, cmd := range []string{"ip", "tc"} {
-		if _, err := deps.findPath(cmd); err != nil {
-			return nil, fmt.Errorf("required command %q not found: %w", cmd, err)
-		}
+	if err := validateImpairmentEnvironment(deps, "lab impair clear"); err != nil {
+		return nil, err
 	}
 
 	node, err := validateImpairmentTarget(ctx, deps, opts.Node)
@@ -131,6 +115,21 @@ func clearWithDeps(ctx context.Context, opts ClearOptions, deps createDeps) (*Cl
 	}
 
 	return &ClearResult{Node: node, Cleared: true}, nil
+}
+
+func validateImpairmentEnvironment(deps createDeps, operation string) error {
+	if deps.goos != "linux" {
+		return fmt.Errorf("%s is supported only on linux: got %s", operation, deps.goos)
+	}
+	if !deps.isRoot() {
+		return fmt.Errorf("%s requires root privileges", operation)
+	}
+	for _, cmd := range []string{"ip", "tc"} {
+		if _, err := deps.findPath(cmd); err != nil {
+			return fmt.Errorf("required command %q not found: %w", cmd, err)
+		}
+	}
+	return nil
 }
 
 func validateImpairmentTarget(ctx context.Context, deps createDeps, node string) (string, error) {

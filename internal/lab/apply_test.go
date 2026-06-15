@@ -264,15 +264,9 @@ func TestClearWithDeps_StateNotFound(t *testing.T) {
 	ex := &fakeExecutor{}
 	_, err := clearWithDeps(context.Background(), ClearOptions{
 		Node: "node1",
-	}, createDeps{
-		exec:     ex,
-		goos:     "linux",
-		isRoot:   func() bool { return true },
-		findPath: func(string) (string, error) { return "/bin/x", nil },
-		loadState: func(context.Context) (*LabState, error) {
-			return nil, ErrStateNotFound
-		},
-	})
+	}, impairmentTestDeps(ex, func(context.Context) (*LabState, error) {
+		return nil, ErrStateNotFound
+	}))
 	if err == nil || !strings.Contains(err.Error(), "lab state not found") {
 		t.Fatalf("expected state-not-found error, got: %v", err)
 	}
@@ -282,15 +276,9 @@ func TestClearWithDeps_NodeNotManaged(t *testing.T) {
 	ex := &fakeExecutor{}
 	_, err := clearWithDeps(context.Background(), ClearOptions{
 		Node: "node9",
-	}, createDeps{
-		exec:     ex,
-		goos:     "linux",
-		isRoot:   func() bool { return true },
-		findPath: func(string) (string, error) { return "/bin/x", nil },
-		loadState: func(context.Context) (*LabState, error) {
-			return &LabState{Nodes: []string{"node1", "node2"}}, nil
-		},
-	})
+	}, impairmentTestDeps(ex, func(context.Context) (*LabState, error) {
+		return &LabState{Nodes: []string{"node1", "node2"}}, nil
+	}))
 	if err == nil || !strings.Contains(err.Error(), "is not managed by current lab") {
 		t.Fatalf("expected unmanaged-node error, got: %v", err)
 	}
@@ -307,15 +295,7 @@ func TestClearWithDeps_NodeNamespaceNotFound(t *testing.T) {
 	}
 	_, err := clearWithDeps(context.Background(), ClearOptions{
 		Node: "node1",
-	}, createDeps{
-		exec:     ex,
-		goos:     "linux",
-		isRoot:   func() bool { return true },
-		findPath: func(string) (string, error) { return "/bin/x", nil },
-		loadState: func(context.Context) (*LabState, error) {
-			return &LabState{Nodes: []string{"node1"}}, nil
-		},
-	})
+	}, validImpairmentTestDeps(ex))
 	if err == nil || !strings.Contains(err.Error(), "namespace not found") {
 		t.Fatalf("expected namespace-not-found error, got: %v", err)
 	}
@@ -332,15 +312,7 @@ func TestClearWithDeps_Success(t *testing.T) {
 	}
 	got, err := clearWithDeps(context.Background(), ClearOptions{
 		Node: "node1",
-	}, createDeps{
-		exec:     ex,
-		goos:     "linux",
-		isRoot:   func() bool { return true },
-		findPath: func(string) (string, error) { return "/bin/x", nil },
-		loadState: func(context.Context) (*LabState, error) {
-			return &LabState{Nodes: []string{"node1"}}, nil
-		},
-	})
+	}, validImpairmentTestDeps(ex))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -369,19 +341,27 @@ func TestClearWithDeps_QdiscMissingSucceeds(t *testing.T) {
 	}
 	got, err := clearWithDeps(context.Background(), ClearOptions{
 		Node: "node1",
-	}, createDeps{
-		exec:     ex,
-		goos:     "linux",
-		isRoot:   func() bool { return true },
-		findPath: func(string) (string, error) { return "/bin/x", nil },
-		loadState: func(context.Context) (*LabState, error) {
-			return &LabState{Nodes: []string{"node1"}}, nil
-		},
-	})
+	}, validImpairmentTestDeps(ex))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.Node != "node1" || got.Cleared {
 		t.Fatalf("expected absent qdisc result, got: %+v", got)
+	}
+}
+
+func validImpairmentTestDeps(ex *fakeExecutor) createDeps {
+	return impairmentTestDeps(ex, func(context.Context) (*LabState, error) {
+		return &LabState{Nodes: []string{"node1"}}, nil
+	})
+}
+
+func impairmentTestDeps(ex *fakeExecutor, loadState func(context.Context) (*LabState, error)) createDeps {
+	return createDeps{
+		exec:      ex,
+		goos:      "linux",
+		isRoot:    func() bool { return true },
+		findPath:  func(string) (string, error) { return "/bin/x", nil },
+		loadState: loadState,
 	}
 }
