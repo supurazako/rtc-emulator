@@ -80,6 +80,7 @@ func newLabImpairApplyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply impairments to a node",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := lab.Apply(context.Background(), lab.ApplyOptions{
 				Node:   node,
@@ -108,6 +109,7 @@ func newLabImpairClearCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clear",
 		Short: "Clear impairments from a node",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := lab.Clear(context.Background(), lab.ClearOptions{Node: node})
 			if err != nil {
@@ -139,6 +141,7 @@ func newLabApplyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply impairments to a node",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := lab.Apply(context.Background(), lab.ApplyOptions{
 				Node:   node,

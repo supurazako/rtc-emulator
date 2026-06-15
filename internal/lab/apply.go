@@ -39,7 +39,7 @@ func Apply(ctx context.Context, opts ApplyOptions) (*ApplyResult, error) {
 func applyWithDeps(ctx context.Context, opts ApplyOptions, deps createDeps) (*ApplyResult, error) {
 	deps = fillCreateDeps(deps)
 
-	if err := validateImpairmentEnvironment(deps, "lab apply"); err != nil {
+	if err := validateImpairmentEnvironment(deps, "lab impairment apply"); err != nil {
 		return nil, err
 	}
 
@@ -168,8 +168,7 @@ func isQdiscMissingError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "no such file or directory") ||
-		strings.Contains(msg, "cannot delete qdisc with handle of zero") ||
+	return strings.Contains(msg, "cannot delete qdisc with handle of zero") ||
 		strings.Contains(msg, "no qdisc")
 }
 

@@ -328,7 +328,7 @@ func TestClearWithDeps_QdiscMissingSucceeds(t *testing.T) {
 	ex := &fakeExecutor{
 		runFn: func(name string, args ...string) error {
 			if callKey(name, args...) == "ip netns exec node1 tc qdisc del dev eth0 root" {
-				return errors.New("RTNETLINK answers: No such file or directory")
+				return errors.New("RTNETLINK answers: Cannot delete qdisc with handle of zero")
 			}
 			return nil
 		},
@@ -347,6 +347,29 @@ func TestClearWithDeps_QdiscMissingSucceeds(t *testing.T) {
 	}
 	if got.Node != "node1" || got.Cleared {
 		t.Fatalf("expected absent qdisc result, got: %+v", got)
+	}
+}
+
+func TestClearWithDeps_NamespaceGoneDuringDeleteFails(t *testing.T) {
+	ex := &fakeExecutor{
+		runFn: func(name string, args ...string) error {
+			if callKey(name, args...) == "ip netns exec node1 tc qdisc del dev eth0 root" {
+				return errors.New("Cannot open network namespace \"node1\": No such file or directory")
+			}
+			return nil
+		},
+		outputFn: func(name string, args ...string) (string, error) {
+			if callKey(name, args...) == "ip netns list" {
+				return "node1\n", nil
+			}
+			return "", nil
+		},
+	}
+	_, err := clearWithDeps(context.Background(), ClearOptions{
+		Node: "node1",
+	}, validImpairmentTestDeps(ex))
+	if err == nil || !strings.Contains(err.Error(), "failed to clear impairments from node1") {
+		t.Fatalf("expected namespace delete failure, got: %v", err)
 	}
 }
 
