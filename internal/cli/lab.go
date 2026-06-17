@@ -18,6 +18,7 @@ func newLabCmd() *cobra.Command {
 	cmd.AddCommand(
 		newLabCreateCmd(),
 		newLabApplyCmd(),
+		newLabImpairCmd(),
 		newLabShowCmd(),
 		newLabDestroyCmd(),
 	)
@@ -55,7 +56,21 @@ func newLabCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func newLabApplyCmd() *cobra.Command {
+func newLabImpairCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "impair",
+		Short: "Manage node network impairments",
+	}
+
+	cmd.AddCommand(
+		newLabImpairApplyCmd(),
+		newLabImpairClearCmd(),
+	)
+
+	return cmd
+}
+
+func newLabImpairApplyCmd() *cobra.Command {
 	var node string
 	var delay string
 	var loss string
@@ -65,6 +80,7 @@ func newLabApplyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply impairments to a node",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := lab.Apply(context.Background(), lab.ApplyOptions{
 				Node:   node,
@@ -77,33 +93,102 @@ func newLabApplyCmd() *cobra.Command {
 				return err
 			}
 
-			display := func(v string) string {
-				if v == "" {
-					return "-"
-				}
-				return v
+			printApplyResult(cmd, result)
+			return nil
+		},
+	}
+
+	addImpairApplyFlags(cmd, &node, &delay, &loss, &jitter, &bw)
+
+	return cmd
+}
+
+func newLabImpairClearCmd() *cobra.Command {
+	var node string
+
+	cmd := &cobra.Command{
+		Use:   "clear",
+		Short: "Clear impairments from a node",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := lab.Clear(context.Background(), lab.ClearOptions{Node: node})
+			if err != nil {
+				return err
 			}
-			fmt.Fprintf(
-				cmd.OutOrStdout(),
-				"applied node=%s delay=%s loss=%s jitter=%s bw=%s\n",
-				result.Node,
-				display(result.Delay),
-				display(result.Loss),
-				display(result.Jitter),
-				display(result.BW),
-			)
+
+			status := "absent"
+			if result.Cleared {
+				status = "cleared"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "cleared node=%s qdisc=%s\n", result.Node, status)
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&node, "node", "", "target node")
-	cmd.Flags().StringVar(&delay, "delay", "", "delay setting")
-	cmd.Flags().StringVar(&loss, "loss", "", "packet loss setting")
-	cmd.Flags().StringVar(&jitter, "jitter", "", "jitter setting")
-	cmd.Flags().StringVar(&bw, "bw", "", "bandwidth setting")
 	_ = cmd.MarkFlagRequired("node")
 
 	return cmd
+}
+
+func newLabApplyCmd() *cobra.Command {
+	var node string
+	var delay string
+	var loss string
+	var jitter string
+	var bw string
+
+	cmd := &cobra.Command{
+		Use:   "apply",
+		Short: "Apply impairments to a node",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := lab.Apply(context.Background(), lab.ApplyOptions{
+				Node:   node,
+				Delay:  delay,
+				Loss:   loss,
+				Jitter: jitter,
+				BW:     bw,
+			})
+			if err != nil {
+				return err
+			}
+
+			printApplyResult(cmd, result)
+			return nil
+		},
+	}
+
+	addImpairApplyFlags(cmd, &node, &delay, &loss, &jitter, &bw)
+
+	return cmd
+}
+
+func addImpairApplyFlags(cmd *cobra.Command, node *string, delay *string, loss *string, jitter *string, bw *string) {
+	cmd.Flags().StringVar(node, "node", "", "target node")
+	cmd.Flags().StringVar(delay, "delay", "", "delay setting")
+	cmd.Flags().StringVar(loss, "loss", "", "packet loss setting")
+	cmd.Flags().StringVar(jitter, "jitter", "", "jitter setting")
+	cmd.Flags().StringVar(bw, "bw", "", "bandwidth setting")
+	_ = cmd.MarkFlagRequired("node")
+}
+
+func printApplyResult(cmd *cobra.Command, result *lab.ApplyResult) {
+	display := func(v string) string {
+		if v == "" {
+			return "-"
+		}
+		return v
+	}
+	fmt.Fprintf(
+		cmd.OutOrStdout(),
+		"applied node=%s delay=%s loss=%s jitter=%s bw=%s\n",
+		result.Node,
+		display(result.Delay),
+		display(result.Loss),
+		display(result.Jitter),
+		display(result.BW),
+	)
 }
 
 func newLabShowCmd() *cobra.Command {
