@@ -19,6 +19,7 @@ func newLabCmd() *cobra.Command {
 		newLabCreateCmd(),
 		newLabApplyCmd(),
 		newLabImpairCmd(),
+		newLabScenarioCmd(),
 		newLabShowCmd(),
 		newLabDestroyCmd(),
 	)
@@ -127,6 +128,58 @@ func newLabImpairClearCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&node, "node", "", "target node")
 	_ = cmd.MarkFlagRequired("node")
+
+	return cmd
+}
+
+func newLabScenarioCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "scenario",
+		Short: "Run WebRTC-oriented lab scenarios",
+	}
+
+	cmd.AddCommand(newLabScenarioRunCmd())
+
+	return cmd
+}
+
+func newLabScenarioRunCmd() *cobra.Command {
+	var runsDir string
+	var node string
+	var delay string
+	var loss string
+	var jitter string
+	var bw string
+
+	cmd := &cobra.Command{
+		Use:   "run SCENARIO",
+		Short: "Run a named lab scenario and save event logs",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := lab.RunScenario(context.Background(), lab.ScenarioRunOptions{
+				Scenario: args[0],
+				RunsDir:  runsDir,
+				Node:     node,
+				Delay:    delay,
+				Loss:     loss,
+				Jitter:   jitter,
+				BW:       bw,
+			})
+			if result != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "run-id=%s\n", result.RunID)
+				fmt.Fprintf(cmd.OutOrStdout(), "run-dir=%s\n", result.RunDir)
+				fmt.Fprintf(cmd.OutOrStdout(), "events=%s\n", result.EventsPath)
+			}
+			return err
+		},
+	}
+
+	cmd.Flags().StringVar(&runsDir, "runs-dir", "runs", "directory for scenario run outputs")
+	cmd.Flags().StringVar(&node, "node", "node1", "target node")
+	cmd.Flags().StringVar(&delay, "delay", "", "delay setting")
+	cmd.Flags().StringVar(&loss, "loss", "", "packet loss setting")
+	cmd.Flags().StringVar(&jitter, "jitter", "", "jitter setting")
+	cmd.Flags().StringVar(&bw, "bw", "", "bandwidth setting")
 
 	return cmd
 }

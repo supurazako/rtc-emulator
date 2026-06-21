@@ -24,6 +24,24 @@ func TestLabImpairHelpListsApplyAndClear(t *testing.T) {
 	}
 }
 
+func TestLabScenarioRunHelpListsBuiltInScenarioOptions(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"lab", "scenario", "run", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"Run a named lab scenario", "--runs-dir", "--node", "--bw"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected help to contain %q, got:\n%s", want, got)
+		}
+	}
+}
+
 func TestLabImpairApplyRejectsPositionalArgs(t *testing.T) {
 	cmd := newRootCmd()
 	var out bytes.Buffer
