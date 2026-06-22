@@ -220,10 +220,7 @@ func newLabWebRTCP2PCmd() *cobra.Command {
 				StatsInterval: statsInterval,
 			})
 			if result != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "run-id=%s\n", result.RunID)
-				fmt.Fprintf(cmd.OutOrStdout(), "run-dir=%s\n", result.RunDir)
-				fmt.Fprintf(cmd.OutOrStdout(), "events=%s\n", result.EventsPath)
-				fmt.Fprintf(cmd.OutOrStdout(), "stats=%s\n", result.StatsPath)
+				printWebRTCP2PResult(cmd, result)
 			}
 			return err
 		},
@@ -236,6 +233,14 @@ func newLabWebRTCP2PCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&statsInterval, "stats-interval", time.Second, "stats collection interval")
 
 	return cmd
+}
+
+func printWebRTCP2PResult(cmd *cobra.Command, result *lab.WebRTCP2PResult) {
+	fmt.Fprintf(cmd.OutOrStdout(), "run-id=%s\n", result.RunID)
+	fmt.Fprintf(cmd.OutOrStdout(), "run-dir=%s\n", result.RunDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "latest-dir=%s\n", result.LatestDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "events=%s\n", result.EventsPath)
+	fmt.Fprintf(cmd.OutOrStdout(), "stats=%s\n", result.StatsPath)
 }
 
 func newLabWebRTCPeerCmd() *cobra.Command {

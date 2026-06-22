@@ -19,6 +19,7 @@ const (
 	defaultWebRTCStatsInterval = time.Second
 	defaultWebRTCNodeA         = "node1"
 	defaultWebRTCNodeB         = "node2"
+	latestRunSymlinkName       = "latest"
 	webRTCP2PEventName         = "webrtc_p2p"
 	webRTCSignalTimeout        = 20 * time.Second
 	webRTCSignalPollInterval   = 50 * time.Millisecond
@@ -35,6 +36,7 @@ type WebRTCP2POptions struct {
 type WebRTCP2PResult struct {
 	RunID      string
 	RunDir     string
+	LatestDir  string
 	EventsPath string
 	StatsPath  string
 }
@@ -88,6 +90,10 @@ func runWebRTCP2PWithDeps(ctx context.Context, opts WebRTCP2POptions, deps webRT
 	if err := deps.mkdirAll(filepath.Join(runDir, "signal"), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC run directory %s: %w", runDir, err)
 	}
+	latestDir, err := updateLatestRunSymlink(opts.RunsDir, runID)
+	if err != nil {
+		return nil, err
+	}
 
 	logger, err := newEventLogger(opts.RunsDir, runID, scenarioRunDeps{
 		now:      deps.now,
@@ -101,6 +107,7 @@ func runWebRTCP2PWithDeps(ctx context.Context, opts WebRTCP2POptions, deps webRT
 	result := &WebRTCP2PResult{
 		RunID:      runID,
 		RunDir:     runDir,
+		LatestDir:  latestDir,
 		EventsPath: logger.eventsPath,
 		StatsPath:  filepath.Join(runDir, "stats.jsonl"),
 	}
@@ -331,6 +338,26 @@ func webRTCPeerNetNSArgs(node string, executable string, opts WebRTCPeerOptions)
 
 func peerStatsFilename(node string) string {
 	return "stats." + node + ".jsonl"
+}
+
+func updateLatestRunSymlink(runsDir string, runID string) (string, error) {
+	latestPath := filepath.Join(runsDir, latestRunSymlinkName)
+	info, err := os.Lstat(latestPath)
+	if err == nil {
+		if info.IsDir() {
+			return "", fmt.Errorf("failed to update latest run link %s: path is a directory", latestPath)
+		}
+		if err := os.Remove(latestPath); err != nil {
+			return "", fmt.Errorf("failed to remove existing latest run link %s: %w", latestPath, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to inspect latest run link %s: %w", latestPath, err)
+	}
+
+	if err := os.Symlink(runID, latestPath); err != nil {
+		return "", fmt.Errorf("failed to create latest run link %s: %w", latestPath, err)
+	}
+	return latestPath, nil
 }
 
 func waitForWebRTCPeerReadiness(ctx context.Context, runDir string, nodes []string, timeout time.Duration) error {

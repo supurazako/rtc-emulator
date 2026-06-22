@@ -41,6 +41,7 @@ Expected output:
 ```text
 run-id=<run-id>
 run-dir=runs/<run-id>
+latest-dir=runs/latest
 events=runs/<run-id>/events.jsonl
 stats=runs/<run-id>/stats.jsonl
 ```
@@ -50,7 +51,7 @@ stats=runs/<run-id>/stats.jsonl
 Check the event phases:
 
 ```bash
-jq -r '.phase + " " + .status' runs/<run-id>/events.jsonl
+jq -r '.phase + " " + .status' runs/latest/events.jsonl
 ```
 
 Expected phases:
@@ -65,7 +66,7 @@ cleanup ok
 Check stats records:
 
 ```bash
-jq -c '{time,node,peer,peer_connection_state,ice_connection_state,bytes_sent,bytes_received,data_messages_sent,data_messages_received}' runs/<run-id>/stats.jsonl
+jq -c '{time,node,peer,peer_connection_state,ice_connection_state,bytes_sent,bytes_received,data_messages_sent,data_messages_received}' runs/latest/stats.jsonl
 ```
 
 Validation points:

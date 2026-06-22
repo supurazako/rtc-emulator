@@ -124,6 +124,16 @@ func TestRunWebRTCP2PWithDepsWritesConnectedEventAndMergedStats(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected result")
 	}
+	if result.LatestDir != filepath.Join(runsDir, latestRunSymlinkName) {
+		t.Fatalf("LatestDir = %s, want %s", result.LatestDir, filepath.Join(runsDir, latestRunSymlinkName))
+	}
+	latestTarget, err := os.Readlink(result.LatestDir)
+	if err != nil {
+		t.Fatalf("failed to read latest link: %v", err)
+	}
+	if latestTarget != runID {
+		t.Fatalf("latest link target = %s, want %s", latestTarget, runID)
+	}
 
 	mu.Lock()
 	gotRunCommands := runCommands

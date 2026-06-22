@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
+	"github.com/supurazako/rtc-emulator/internal/lab"
 )
 
 func TestLabImpairHelpListsApplyAndClear(t *testing.T) {
@@ -83,6 +86,33 @@ func TestLabWebRTCHelpHidesInternalPeerCommand(t *testing.T) {
 	}
 	if !strings.Contains(got, "p2p") {
 		t.Fatalf("expected help to expose p2p command, got:\n%s", got)
+	}
+}
+
+func TestPrintWebRTCP2PResultIncludesLatestDir(t *testing.T) {
+	cmd := &cobra.Command{}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	printWebRTCP2PResult(cmd, &lab.WebRTCP2PResult{
+		RunID:      "run-1",
+		RunDir:     "runs/run-1",
+		LatestDir:  "runs/latest",
+		EventsPath: "runs/run-1/events.jsonl",
+		StatsPath:  "runs/run-1/stats.jsonl",
+	})
+
+	got := out.String()
+	for _, want := range []string{
+		"run-id=run-1\n",
+		"run-dir=runs/run-1\n",
+		"latest-dir=runs/latest\n",
+		"events=runs/run-1/events.jsonl\n",
+		"stats=runs/run-1/stats.jsonl\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, got)
+		}
 	}
 }
 
