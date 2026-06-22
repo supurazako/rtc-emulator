@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/supurazako/rtc-emulator/internal/lab"
@@ -20,6 +21,7 @@ func newLabCmd() *cobra.Command {
 		newLabApplyCmd(),
 		newLabImpairCmd(),
 		newLabScenarioCmd(),
+		newLabWebRTCCmd(),
 		newLabShowCmd(),
 		newLabDestroyCmd(),
 	)
@@ -180,6 +182,106 @@ func newLabScenarioRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&loss, "loss", "", "packet loss setting")
 	cmd.Flags().StringVar(&jitter, "jitter", "", "jitter setting")
 	cmd.Flags().StringVar(&bw, "bw", "", "bandwidth setting")
+
+	return cmd
+}
+
+func newLabWebRTCCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "webrtc",
+		Short: "Run lab WebRTC workflows",
+	}
+
+	cmd.AddCommand(
+		newLabWebRTCP2PCmd(),
+		newLabWebRTCPeerCmd(),
+	)
+
+	return cmd
+}
+
+func newLabWebRTCP2PCmd() *cobra.Command {
+	var runsDir string
+	var nodeA string
+	var nodeB string
+	var duration time.Duration
+	var statsInterval time.Duration
+
+	cmd := &cobra.Command{
+		Use:   "p2p",
+		Short: "Run a lab WebRTC P2P flow and save stats logs",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := lab.RunWebRTCP2P(context.Background(), lab.WebRTCP2POptions{
+				RunsDir:       runsDir,
+				NodeA:         nodeA,
+				NodeB:         nodeB,
+				Duration:      duration,
+				StatsInterval: statsInterval,
+			})
+			if result != nil {
+				printWebRTCP2PResult(cmd, result)
+			}
+			return err
+		},
+	}
+
+	cmd.Flags().StringVar(&runsDir, "runs-dir", "runs", "directory for WebRTC run outputs")
+	cmd.Flags().StringVar(&nodeA, "node-a", "node1", "offerer node")
+	cmd.Flags().StringVar(&nodeB, "node-b", "node2", "answerer node")
+	cmd.Flags().DurationVar(&duration, "duration", 10*time.Second, "stats collection duration")
+	cmd.Flags().DurationVar(&statsInterval, "stats-interval", time.Second, "stats collection interval")
+
+	return cmd
+}
+
+func printWebRTCP2PResult(cmd *cobra.Command, result *lab.WebRTCP2PResult) {
+	fmt.Fprintf(cmd.OutOrStdout(), "run-id=%s\n", result.RunID)
+	fmt.Fprintf(cmd.OutOrStdout(), "run-dir=%s\n", result.RunDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "latest-dir=%s\n", result.LatestDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "events=%s\n", result.EventsPath)
+	fmt.Fprintf(cmd.OutOrStdout(), "stats=%s\n", result.StatsPath)
+}
+
+func newLabWebRTCPeerCmd() *cobra.Command {
+	var role string
+	var runID string
+	var runDir string
+	var node string
+	var peer string
+	var duration time.Duration
+	var statsInterval time.Duration
+
+	cmd := &cobra.Command{
+		Use:    "peer",
+		Short:  "Run one internal WebRTC peer process",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return lab.RunWebRTCPeer(context.Background(), lab.WebRTCPeerOptions{
+				Role:          role,
+				RunID:         runID,
+				RunDir:        runDir,
+				Node:          node,
+				Peer:          peer,
+				Duration:      duration,
+				StatsInterval: statsInterval,
+			})
+		},
+	}
+
+	cmd.Flags().StringVar(&role, "role", "", "peer role")
+	cmd.Flags().StringVar(&runID, "run-id", "", "run id")
+	cmd.Flags().StringVar(&runDir, "run-dir", "", "run directory")
+	cmd.Flags().StringVar(&node, "node", "", "current node")
+	cmd.Flags().StringVar(&peer, "peer", "", "remote peer node")
+	cmd.Flags().DurationVar(&duration, "duration", 10*time.Second, "stats collection duration")
+	cmd.Flags().DurationVar(&statsInterval, "stats-interval", time.Second, "stats collection interval")
+	_ = cmd.MarkFlagRequired("role")
+	_ = cmd.MarkFlagRequired("run-id")
+	_ = cmd.MarkFlagRequired("run-dir")
+	_ = cmd.MarkFlagRequired("node")
+	_ = cmd.MarkFlagRequired("peer")
 
 	return cmd
 }
