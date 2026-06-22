@@ -42,6 +42,50 @@ func TestLabScenarioRunHelpListsBuiltInScenarioOptions(t *testing.T) {
 	}
 }
 
+func TestLabWebRTCP2PHelpListsStatsOptions(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"lab", "webrtc", "p2p", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"Run a lab WebRTC P2P flow",
+		"--node-a",
+		"--node-b",
+		"--duration",
+		"--stats-interval",
+		"--runs-dir",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected help to contain %q, got:\n%s", want, got)
+		}
+	}
+}
+
+func TestLabWebRTCHelpHidesInternalPeerCommand(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"lab", "webrtc", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "peer") {
+		t.Fatalf("expected help not to expose internal peer command, got:\n%s", got)
+	}
+	if !strings.Contains(got, "p2p") {
+		t.Fatalf("expected help to expose p2p command, got:\n%s", got)
+	}
+}
+
 func TestLabImpairApplyRejectsPositionalArgs(t *testing.T) {
 	cmd := newRootCmd()
 	var out bytes.Buffer

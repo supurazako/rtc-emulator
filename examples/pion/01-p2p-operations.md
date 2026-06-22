@@ -1,7 +1,7 @@
 # Pion P2P Operations
 
-This guide shows a practical P2P experiment flow with `rtc-emulator` and Pion.
-The focus is operational verification with 3 participants.
+This guide shows the minimum manual verification flow for the built-in Pion
+P2P runner.
 
 ## Prerequisites
 
@@ -9,66 +9,76 @@ The focus is operational verification with 3 participants.
 - Root privileges (or `sudo`)
 - Installed commands: `ip`, `sysctl`, `iptables`, `ping`, `tc`
 - Go toolchain
-- A runnable Pion peer app (your own app or sample in your environment)
 
-## 1. Create a 3-node lab
-
-```bash
-sudo rtc-emulator lab create --nodes 3
-```
-
-## 2. Start 3 Pion participants
-
-Run one participant process per namespace:
+## 1. Build the CLI
 
 ```bash
-sudo ip netns exec node1 <your-pion-peer-command> --name node1
-sudo ip netns exec node2 <your-pion-peer-command> --name node2
-sudo ip netns exec node3 <your-pion-peer-command> --name node3
+go build -o bin/rtc-emulator ./cmd/rtc-emulator
 ```
 
-Note:
+## 2. Create a 2-node lab
 
-- `<your-pion-peer-command>` is a placeholder.
-- Replace it with the actual command used in your environment to start a Pion peer process.
-- Example form: `./bin/pion-peer --room demo --name node1`
+```bash
+sudo ./bin/rtc-emulator lab create --nodes 2
+```
 
-Use your normal signaling setup for session join/offer/answer exchange.
+## 3. Run the built-in Pion P2P flow
 
-## 3. Check P2P mesh behavior
+```bash
+sudo ./bin/rtc-emulator lab webrtc p2p \
+  --node-a node1 \
+  --node-b node2 \
+  --duration 10s \
+  --stats-interval 1s
+```
+
+The command starts one hidden peer process in each namespace with
+`ip netns exec`, exchanges offer/answer files under the run directory, opens a
+DataChannel, sends synthetic messages, and writes merged stats.
+
+Expected output:
+
+```text
+run-id=<run-id>
+run-dir=runs/<run-id>
+events=runs/<run-id>/events.jsonl
+stats=runs/<run-id>/stats.jsonl
+```
+
+## 4. Verify generated logs
+
+Check the event phases:
+
+```bash
+jq -r '.phase + " " + .status' runs/<run-id>/events.jsonl
+```
+
+Expected phases:
+
+```text
+webrtc_start ok
+connected ok
+stats_complete ok
+cleanup ok
+```
+
+Check stats records:
+
+```bash
+jq -c '{time,node,peer,peer_connection_state,ice_connection_state,bytes_sent,bytes_received,data_messages_sent,data_messages_received}' runs/<run-id>/stats.jsonl
+```
 
 Validation points:
 
-- all 3 participants join the same session
-- media path is established for every participant
-- per-node logs/stats are visible and stable
-
-Operational note:
-
-- with mesh-style P2P, CPU and upstream usage increase with participant count
-
-## 4. Apply impairment experiments
-
-Apply different conditions per participant node:
-
-```bash
-sudo rtc-emulator lab apply --node node1 --delay 120ms --jitter 20ms
-sudo rtc-emulator lab apply --node node2 --loss 1.5%
-sudo rtc-emulator lab apply --node node3 --bw 800kbit
-```
-
-Verify applied qdisc state:
-
-```bash
-sudo ip netns exec node1 tc qdisc show dev eth0
-sudo ip netns exec node2 tc qdisc show dev eth0
-sudo ip netns exec node3 tc qdisc show dev eth0
-```
+- records exist for both `node1` and `node2`
+- `peer_connection_state` and `ice_connection_state` reach `connected`
+- timestamps in `stats.jsonl` can be compared with `events.jsonl`
+- byte and DataChannel message counters increase during the run
 
 ## 5. Cleanup
 
 ```bash
-sudo rtc-emulator lab destroy
+sudo ./bin/rtc-emulator lab destroy
 ```
 
 Confirm no leftovers:
