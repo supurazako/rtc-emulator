@@ -174,6 +174,9 @@ func validateScenarioRunOptions(opts ScenarioRunOptions) error {
 	if opts.Scenario != ScenarioWebRTCUplinkCongestion {
 		return fmt.Errorf("unsupported scenario %q", opts.Scenario)
 	}
+	if opts.Interface != defaultScenarioIface {
+		return fmt.Errorf("unsupported interface %q: only %s is supported", opts.Interface, defaultScenarioIface)
+	}
 	if opts.Jitter != "" && opts.Delay == "" {
 		return errors.New("jitter requires delay")
 	}

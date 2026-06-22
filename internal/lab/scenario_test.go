@@ -88,6 +88,34 @@ func TestRunScenarioWithDeps_ApplyFailureStillLogsCleanup(t *testing.T) {
 	}
 }
 
+func TestRunScenarioWithDeps_RejectsUnsupportedInterface(t *testing.T) {
+	ex := scenarioTestExecutor(nil)
+	runsDir := filepath.Join(t.TempDir(), "runs")
+
+	got, err := runScenarioWithDeps(
+		context.Background(),
+		ScenarioRunOptions{
+			Scenario:  ScenarioWebRTCUplinkCongestion,
+			RunsDir:   runsDir,
+			Interface: "eth1",
+		},
+		validImpairmentTestDeps(ex),
+		fixedScenarioRunDeps("run-unsupported-interface"),
+	)
+	if err == nil || !strings.Contains(err.Error(), `unsupported interface "eth1"`) {
+		t.Fatalf("expected unsupported interface error, got: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil result, got: %+v", got)
+	}
+	if len(ex.calls) != 0 {
+		t.Fatalf("expected no apply or clear calls, got: %v", ex.calls)
+	}
+	if _, statErr := os.Stat(filepath.Join(runsDir, "run-unsupported-interface")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected no run directory, stat err: %v", statErr)
+	}
+}
+
 func TestRunScenarioWithDeps_ClearFailureLoggedAsError(t *testing.T) {
 	ex := scenarioTestExecutor(func(name string, args ...string) error {
 		if callKey(name, args...) == "ip netns exec node1 tc qdisc del dev eth0 root" {
