@@ -148,10 +148,15 @@ func newLabScenarioCmd() *cobra.Command {
 func newLabScenarioRunCmd() *cobra.Command {
 	var runsDir string
 	var node string
+	var peer string
 	var delay string
 	var loss string
 	var jitter string
 	var bw string
+	var baseline time.Duration
+	var impaired time.Duration
+	var recovery time.Duration
+	var statsInterval time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "run SCENARIO",
@@ -159,18 +164,21 @@ func newLabScenarioRunCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := lab.RunScenario(context.Background(), lab.ScenarioRunOptions{
-				Scenario: args[0],
-				RunsDir:  runsDir,
-				Node:     node,
-				Delay:    delay,
-				Loss:     loss,
-				Jitter:   jitter,
-				BW:       bw,
+				Scenario:         args[0],
+				RunsDir:          runsDir,
+				Node:             node,
+				Peer:             peer,
+				Delay:            delay,
+				Loss:             loss,
+				Jitter:           jitter,
+				BW:               bw,
+				BaselineDuration: baseline,
+				ImpairedDuration: impaired,
+				RecoveryDuration: recovery,
+				StatsInterval:    statsInterval,
 			})
 			if result != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "run-id=%s\n", result.RunID)
-				fmt.Fprintf(cmd.OutOrStdout(), "run-dir=%s\n", result.RunDir)
-				fmt.Fprintf(cmd.OutOrStdout(), "events=%s\n", result.EventsPath)
+				printScenarioRunResult(cmd, result)
 			}
 			return err
 		},
@@ -178,12 +186,25 @@ func newLabScenarioRunCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&runsDir, "runs-dir", "runs", "directory for scenario run outputs")
 	cmd.Flags().StringVar(&node, "node", "node1", "target node")
+	cmd.Flags().StringVar(&peer, "peer", "node2", "WebRTC peer node")
 	cmd.Flags().StringVar(&delay, "delay", "", "delay setting")
 	cmd.Flags().StringVar(&loss, "loss", "", "packet loss setting")
 	cmd.Flags().StringVar(&jitter, "jitter", "", "jitter setting")
 	cmd.Flags().StringVar(&bw, "bw", "", "bandwidth setting")
+	cmd.Flags().DurationVar(&baseline, "baseline", 5*time.Second, "baseline phase duration")
+	cmd.Flags().DurationVar(&impaired, "impaired", 10*time.Second, "impaired phase duration")
+	cmd.Flags().DurationVar(&recovery, "recovery", 5*time.Second, "recovery phase duration")
+	cmd.Flags().DurationVar(&statsInterval, "stats-interval", time.Second, "stats collection interval")
 
 	return cmd
+}
+
+func printScenarioRunResult(cmd *cobra.Command, result *lab.ScenarioRunResult) {
+	fmt.Fprintf(cmd.OutOrStdout(), "run-id=%s\n", result.RunID)
+	fmt.Fprintf(cmd.OutOrStdout(), "run-dir=%s\n", result.RunDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "latest-dir=%s\n", result.LatestDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "events=%s\n", result.EventsPath)
+	fmt.Fprintf(cmd.OutOrStdout(), "stats=%s\n", result.StatsPath)
 }
 
 func newLabWebRTCCmd() *cobra.Command {
