@@ -42,6 +42,9 @@ func RunWebRTCPeer(ctx context.Context, opts WebRTCPeerOptions) error {
 	}
 	defer pc.Close()
 
+	done := make(chan struct{})
+	defer close(done)
+
 	state := &webRTCPeerRuntimeState{
 		peerConnection: webrtc.PeerConnectionStateNew.String(),
 		iceConnection:  webrtc.ICEConnectionStateNew.String(),
@@ -50,7 +53,6 @@ func RunWebRTCPeer(ctx context.Context, opts WebRTCPeerOptions) error {
 	var connectedOnce sync.Once
 	dataOpen := make(chan struct{})
 	var dataOpenOnce sync.Once
-	done := make(chan struct{})
 
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
 		state.setPeerConnection(s.String())
@@ -80,10 +82,13 @@ func RunWebRTCPeer(ctx context.Context, opts WebRTCPeerOptions) error {
 		}
 	}
 
-	if err := waitForSignal(ctx, connected, 20*time.Second, "peer connection connected"); err != nil {
+	if err := waitForSignal(ctx, connected, webRTCSignalTimeout, "peer connection connected"); err != nil {
 		return err
 	}
-	if err := waitForSignal(ctx, dataOpen, 20*time.Second, "data channel open"); err != nil {
+	if err := waitForSignal(ctx, dataOpen, webRTCSignalTimeout, "data channel open"); err != nil {
+		return err
+	}
+	if err := writePeerConnectedMarker(opts.RunDir, opts, state); err != nil {
 		return err
 	}
 
@@ -92,11 +97,9 @@ func RunWebRTCPeer(ctx context.Context, opts WebRTCPeerOptions) error {
 		return os.OpenFile(path, flag, perm)
 	})
 	if err != nil {
-		close(done)
 		return err
 	}
 	err = writePeerStats(ctx, pc, state, logger, opts)
-	close(done)
 	if closeErr := logger.close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
@@ -211,12 +214,14 @@ func runOffererSignaling(ctx context.Context, pc *webrtc.PeerConnection, runDir 
 	if err := pc.SetLocalDescription(offer); err != nil {
 		return fmt.Errorf("failed to set local offer: %w", err)
 	}
-	<-gatherComplete
-
-	if err := writeSessionDescription(filepath.Join(runDir, "signal", "offer.json"), pc.LocalDescription()); err != nil {
+	if err := waitForGathering(ctx, gatherComplete, webRTCSignalTimeout, "local offer candidates"); err != nil {
 		return err
 	}
-	answer, err := waitForSessionDescription(ctx, filepath.Join(runDir, "signal", "answer.json"), 20*time.Second)
+
+	if err := writeSessionDescription(offerPath(runDir), pc.LocalDescription()); err != nil {
+		return err
+	}
+	answer, err := waitForSessionDescription(ctx, answerPath(runDir), webRTCSignalTimeout)
 	if err != nil {
 		return err
 	}
@@ -227,7 +232,7 @@ func runOffererSignaling(ctx context.Context, pc *webrtc.PeerConnection, runDir 
 }
 
 func runAnswererSignaling(ctx context.Context, pc *webrtc.PeerConnection, runDir string) error {
-	offer, err := waitForSessionDescription(ctx, filepath.Join(runDir, "signal", "offer.json"), 20*time.Second)
+	offer, err := waitForSessionDescription(ctx, offerPath(runDir), webRTCSignalTimeout)
 	if err != nil {
 		return err
 	}
@@ -243,10 +248,47 @@ func runAnswererSignaling(ctx context.Context, pc *webrtc.PeerConnection, runDir
 	if err := pc.SetLocalDescription(answer); err != nil {
 		return fmt.Errorf("failed to set local answer: %w", err)
 	}
-	<-gatherComplete
-
-	if err := writeSessionDescription(filepath.Join(runDir, "signal", "answer.json"), pc.LocalDescription()); err != nil {
+	if err := waitForGathering(ctx, gatherComplete, webRTCSignalTimeout, "local answer candidates"); err != nil {
 		return err
+	}
+
+	if err := writeSessionDescription(answerPath(runDir), pc.LocalDescription()); err != nil {
+		return err
+	}
+	return nil
+}
+
+type peerConnectedMarker struct {
+	RunID               string `json:"run_id"`
+	Time                string `json:"time"`
+	Node                string `json:"node"`
+	Peer                string `json:"peer"`
+	PeerConnectionState string `json:"peer_connection_state"`
+	ICEConnectionState  string `json:"ice_connection_state"`
+}
+
+func writePeerConnectedMarker(runDir string, opts WebRTCPeerOptions, state *webRTCPeerRuntimeState) error {
+	pcState, iceState := state.snapshot()
+	marker := peerConnectedMarker{
+		RunID:               opts.RunID,
+		Time:                time.Now().UTC().Format(time.RFC3339Nano),
+		Node:                opts.Node,
+		Peer:                opts.Peer,
+		PeerConnectionState: pcState,
+		ICEConnectionState:  iceState,
+	}
+	b, err := json.Marshal(marker)
+	if err != nil {
+		return fmt.Errorf("failed to encode WebRTC connected marker for %s: %w", opts.Node, err)
+	}
+	path := peerConnectedMarkerPath(runDir, opts.Node)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return fmt.Errorf("failed to write WebRTC connected marker %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("failed to commit WebRTC connected marker %s: %w", path, err)
 	}
 	return nil
 }
@@ -288,12 +330,23 @@ func waitForSessionDescription(ctx context.Context, path string, timeout time.Du
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("timed out waiting for session description %s: %w", path, ctx.Err())
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(webRTCSignalPollInterval):
 		}
 	}
 }
 
 func waitForSignal(ctx context.Context, ch <-chan struct{}, timeout time.Duration, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("timed out waiting for %s: %w", name, ctx.Err())
+	}
+}
+
+func waitForGathering(ctx context.Context, ch <-chan struct{}, timeout time.Duration, name string) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	select {

@@ -20,6 +20,8 @@ const (
 	defaultWebRTCNodeA         = "node1"
 	defaultWebRTCNodeB         = "node2"
 	webRTCP2PEventName         = "webrtc_p2p"
+	webRTCSignalTimeout        = 20 * time.Second
+	webRTCSignalPollInterval   = 50 * time.Millisecond
 )
 
 type WebRTCP2POptions struct {
@@ -125,13 +127,9 @@ func runWebRTCP2PWithDeps(ctx context.Context, opts WebRTCP2POptions, deps webRT
 	if err != nil {
 		runErr = errors.Join(runErr, fmt.Errorf("failed to resolve current executable: %w", err))
 	} else {
-		if err := runWebRTCPeerProcesses(ctx, opts, runID, runDir, executable, deps); err != nil {
-			runErr = errors.Join(runErr, err)
-		}
-	}
-
-	if runErr == nil {
-		if err := record("connected", "ok", nil); err != nil {
+		if err := runWebRTCPeerProcesses(ctx, opts, runID, runDir, executable, deps, func() error {
+			return record("connected", "ok", nil)
+		}); err != nil {
 			runErr = errors.Join(runErr, err)
 		}
 	}
@@ -255,6 +253,7 @@ func runWebRTCPeerProcesses(
 	runDir string,
 	executable string,
 	deps webRTCP2PDeps,
+	onConnected func() error,
 ) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -269,8 +268,8 @@ func runWebRTCPeerProcesses(
 	}
 
 	procs := []*peerProc{
-		{node: opts.NodeB, role: "answerer", peer: opts.NodeA},
-		{node: opts.NodeA, role: "offerer", peer: opts.NodeB},
+		{node: opts.NodeB, role: webRTCPeerRoleAnswerer, peer: opts.NodeA},
+		{node: opts.NodeA, role: webRTCPeerRoleOfferer, peer: opts.NodeB},
 	}
 
 	var wg sync.WaitGroup
@@ -294,9 +293,19 @@ func runWebRTCPeerProcesses(
 			}
 		}()
 	}
+
+	readyErr := waitForWebRTCPeerReadiness(ctx, runDir, []string{opts.NodeA, opts.NodeB}, webRTCSignalTimeout)
+	if readyErr != nil {
+		cancel()
+	} else if onConnected != nil {
+		readyErr = onConnected()
+		if readyErr != nil {
+			cancel()
+		}
+	}
 	wg.Wait()
 
-	var runErr error
+	var runErr error = readyErr
 	for _, proc := range procs {
 		if proc.err != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("webrtc peer %s/%s failed: %w stdout=%q stderr=%q", proc.node, proc.role, proc.err, proc.stdout.String(), proc.stderr.String()))
@@ -322,4 +331,48 @@ func webRTCPeerNetNSArgs(node string, executable string, opts WebRTCPeerOptions)
 
 func peerStatsFilename(node string) string {
 	return "stats." + node + ".jsonl"
+}
+
+func waitForWebRTCPeerReadiness(ctx context.Context, runDir string, nodes []string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ready := make(map[string]bool, len(nodes))
+	for {
+		for _, node := range nodes {
+			if ready[node] {
+				continue
+			}
+			if _, err := os.Stat(peerConnectedMarkerPath(runDir, node)); err == nil {
+				ready[node] = true
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("failed to read WebRTC connected marker for %s: %w", node, err)
+			}
+		}
+		if len(ready) == len(nodes) {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for WebRTC peer readiness: %w", ctx.Err())
+		case <-time.After(webRTCSignalPollInterval):
+		}
+	}
+}
+
+func signalDir(runDir string) string {
+	return filepath.Join(runDir, "signal")
+}
+
+func offerPath(runDir string) string {
+	return filepath.Join(signalDir(runDir), "offer.json")
+}
+
+func answerPath(runDir string) string {
+	return filepath.Join(signalDir(runDir), "answer.json")
+}
+
+func peerConnectedMarkerPath(runDir string, node string) string {
+	return filepath.Join(signalDir(runDir), "connected."+node+".json")
 }
