@@ -19,7 +19,7 @@ func TestRunScenarioWithDeps_WritesJSONLAndPhaseOrder(t *testing.T) {
 	got, err := runScenarioWithDeps(
 		context.Background(),
 		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: runsDir},
-		validImpairmentTestDeps(ex),
+		validScenarioTestDeps(ex),
 		fixedScenarioRunDeps("run-test"),
 	)
 	if err != nil {
@@ -30,6 +30,16 @@ func TestRunScenarioWithDeps_WritesJSONLAndPhaseOrder(t *testing.T) {
 	}
 	if got.EventsPath != filepath.Join(runsDir, "run-test", "events.jsonl") {
 		t.Fatalf("unexpected events path: %s", got.EventsPath)
+	}
+	if got.StatsPath != filepath.Join(runsDir, "run-test", "stats.jsonl") {
+		t.Fatalf("unexpected stats path: %s", got.StatsPath)
+	}
+	latestTarget, err := os.Readlink(got.LatestDir)
+	if err != nil {
+		t.Fatalf("failed to read latest run link: %v", err)
+	}
+	if latestTarget != "run-test" {
+		t.Fatalf("latest run link = %s, want run-test", latestTarget)
 	}
 
 	events := readScenarioEvents(t, got.EventsPath)
@@ -51,6 +61,13 @@ func TestRunScenarioWithDeps_WritesJSONLAndPhaseOrder(t *testing.T) {
 	if countCall(ex.calls, "ip netns exec node1 tc qdisc del dev eth0 root") != 2 {
 		t.Fatalf("expected recovery and cleanup clear calls, calls=%v", ex.calls)
 	}
+	stats := readStatsRecords(t, got.StatsPath)
+	if len(stats) != 2 {
+		t.Fatalf("expected merged stats from two peers, got %+v", stats)
+	}
+	if stats[0].Node != "node2" || stats[1].Node != "node1" {
+		t.Fatalf("unexpected stats order: %+v", stats)
+	}
 }
 
 func TestRunScenarioWithDeps_ApplyFailureStillLogsCleanup(t *testing.T) {
@@ -65,7 +82,7 @@ func TestRunScenarioWithDeps_ApplyFailureStillLogsCleanup(t *testing.T) {
 	got, err := runScenarioWithDeps(
 		context.Background(),
 		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: runsDir},
-		validImpairmentTestDeps(ex),
+		validScenarioTestDeps(ex),
 		fixedScenarioRunDeps("run-apply-failure"),
 	)
 	if err == nil || !strings.Contains(err.Error(), "impaired phase failed") {
@@ -88,6 +105,119 @@ func TestRunScenarioWithDeps_ApplyFailureStillLogsCleanup(t *testing.T) {
 	}
 }
 
+func TestRunScenarioWithDeps_ApplyFailureStopsPeersBeforeWait(t *testing.T) {
+	ex := scenarioTestExecutor(func(name string, args ...string) error {
+		if callKey(name, args...) == "ip netns exec node1 tc qdisc replace dev eth0 root netem rate 1mbit" {
+			return errors.New("apply failed")
+		}
+		return nil
+	})
+	runsDir := filepath.Join(t.TempDir(), "runs")
+	peerCanceled := make(chan string, 2)
+
+	got, err := runScenarioWithDeps(
+		context.Background(),
+		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: runsDir},
+		validScenarioTestDeps(ex),
+		scenarioRunDeps{
+			now: func() time.Time {
+				return time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
+			},
+			newRunID: func(time.Time) (string, error) {
+				return "run-apply-failure-cancel", nil
+			},
+			executable: func() (string, error) {
+				return "/tmp/rtc-emulator", nil
+			},
+			runCommand: func(ctx context.Context, name string, args []string, _ io.Writer, _ io.Writer) error {
+				if name != "ip" {
+					return nil
+				}
+				runID := argValue(args, "--run-id")
+				runDir := argValue(args, "--run-dir")
+				node := argValue(args, "--node")
+				peer := argValue(args, "--peer")
+				state := &webRTCPeerRuntimeState{
+					peerConnection: "connected",
+					iceConnection:  "connected",
+				}
+				if err := writePeerConnectedMarker(runDir, WebRTCPeerOptions{
+					RunID: runID,
+					Node:  node,
+					Peer:  peer,
+				}, state); err != nil {
+					return err
+				}
+				if err := writeOneStatsRecord(filepath.Join(runDir, peerStatsFilename(node)), WebRTCStatsRecord{
+					RunID:               runID,
+					Time:                time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+					Node:                node,
+					Peer:                peer,
+					PeerConnectionState: "connected",
+					ICEConnectionState:  "connected",
+				}); err != nil {
+					return err
+				}
+				<-ctx.Done()
+				peerCanceled <- node
+				return ctx.Err()
+			},
+			sleep: func(context.Context, time.Duration) error {
+				return nil
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "impaired phase failed") {
+		t.Fatalf("expected impaired phase error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "webrtc peer") {
+		t.Fatalf("expected intentional peer cancellation to be suppressed, got: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected partial result")
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-peerCanceled:
+		default:
+			t.Fatalf("expected both peer processes to be canceled before scenario returns")
+		}
+	}
+}
+
+func TestRunScenarioWithDeps_ExecutableFailureDoesNotAddMissingStatsError(t *testing.T) {
+	ex := scenarioTestExecutor(nil)
+	runsDir := filepath.Join(t.TempDir(), "runs")
+
+	got, err := runScenarioWithDeps(
+		context.Background(),
+		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: runsDir},
+		validScenarioTestDeps(ex),
+		scenarioRunDeps{
+			now: func() time.Time {
+				return time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
+			},
+			newRunID: func(time.Time) (string, error) {
+				return "run-executable-failure", nil
+			},
+			executable: func() (string, error) {
+				return "", errors.New("no executable")
+			},
+			runCommand: fakeScenarioWebRTCPeerCommand,
+			sleep:      func(context.Context, time.Duration) error { return nil },
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "failed to resolve current executable") {
+		t.Fatalf("expected executable error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "failed to merge peer stats logs") {
+		t.Fatalf("expected no missing stats merge error, got: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected partial result")
+	}
+}
+
 func TestRunScenarioWithDeps_RejectsUnsupportedInterface(t *testing.T) {
 	ex := scenarioTestExecutor(nil)
 	runsDir := filepath.Join(t.TempDir(), "runs")
@@ -99,7 +229,7 @@ func TestRunScenarioWithDeps_RejectsUnsupportedInterface(t *testing.T) {
 			RunsDir:   runsDir,
 			Interface: "eth1",
 		},
-		validImpairmentTestDeps(ex),
+		validScenarioTestDeps(ex),
 		fixedScenarioRunDeps("run-unsupported-interface"),
 	)
 	if err == nil || !strings.Contains(err.Error(), `unsupported interface "eth1"`) {
@@ -128,7 +258,7 @@ func TestRunScenarioWithDeps_ClearFailureLoggedAsError(t *testing.T) {
 	got, err := runScenarioWithDeps(
 		context.Background(),
 		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: runsDir},
-		validImpairmentTestDeps(ex),
+		validScenarioTestDeps(ex),
 		fixedScenarioRunDeps("run-clear-failure"),
 	)
 	if err == nil || !strings.Contains(err.Error(), "recovery phase failed") || !strings.Contains(err.Error(), "cleanup phase failed") {
@@ -145,14 +275,55 @@ func TestRunScenarioWithDeps_ClearFailureLoggedAsError(t *testing.T) {
 	}
 }
 
+func TestRunScenarioWithDeps_CancelDuringBaselineSkipsApplyAndCleansUp(t *testing.T) {
+	ex := scenarioTestExecutor(nil)
+	runsDir := filepath.Join(t.TempDir(), "runs")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	got, err := runScenarioWithDeps(
+		ctx,
+		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: runsDir},
+		validScenarioTestDeps(ex),
+		scenarioRunDeps{
+			now: func() time.Time {
+				return time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
+			},
+			newRunID: func(time.Time) (string, error) {
+				return "run-cancel-baseline", nil
+			},
+			executable: func() (string, error) {
+				return "/tmp/rtc-emulator", nil
+			},
+			runCommand: fakeScenarioWebRTCPeerCommand,
+			sleep: func(context.Context, time.Duration) error {
+				cancel()
+				return context.Canceled
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "phase wait interrupted") {
+		t.Fatalf("expected interrupted wait error, got: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected partial result")
+	}
+	if hasCall(ex.calls, "ip netns exec node1 tc qdisc replace dev eth0 root netem rate 1mbit") {
+		t.Fatalf("expected no impairment apply after cancellation, calls=%v", ex.calls)
+	}
+	if countCall(ex.calls, "ip netns exec node1 tc qdisc del dev eth0 root") != 1 {
+		t.Fatalf("expected cleanup clear after cancellation, calls=%v", ex.calls)
+	}
+}
+
 func TestRunScenarioWithDeps_LogWriteFailureReturnsErrorAndCleansUp(t *testing.T) {
 	ex := scenarioTestExecutor(nil)
 	writer := &failingWriteCloser{failOn: 2}
+	runsDir := filepath.Join(t.TempDir(), "runs")
 
 	_, err := runScenarioWithDeps(
 		context.Background(),
-		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: "runs"},
-		validImpairmentTestDeps(ex),
+		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: runsDir},
+		validScenarioTestDeps(ex),
 		scenarioRunDeps{
 			now: func() time.Time {
 				return time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
@@ -160,12 +331,15 @@ func TestRunScenarioWithDeps_LogWriteFailureReturnsErrorAndCleansUp(t *testing.T
 			newRunID: func(time.Time) (string, error) {
 				return "run-write-failure", nil
 			},
-			mkdirAll: func(string, os.FileMode) error {
-				return nil
-			},
+			mkdirAll: os.MkdirAll,
 			openFile: func(string, int, os.FileMode) (io.WriteCloser, error) {
 				return writer, nil
 			},
+			executable: func() (string, error) {
+				return "/tmp/rtc-emulator", nil
+			},
+			runCommand: fakeScenarioWebRTCPeerCommand,
+			sleep:      func(context.Context, time.Duration) error { return nil },
 		},
 	)
 	if err == nil || !strings.Contains(err.Error(), "failed to write event log") {
@@ -184,7 +358,7 @@ func scenarioTestExecutor(runFn func(name string, args ...string) error) *fakeEx
 		runFn: runFn,
 		outputFn: func(name string, args ...string) (string, error) {
 			if callKey(name, args...) == "ip netns list" {
-				return "node1\n", nil
+				return "node1\nnode2\n", nil
 			}
 			return "", nil
 		},
@@ -199,7 +373,51 @@ func fixedScenarioRunDeps(runID string) scenarioRunDeps {
 		newRunID: func(time.Time) (string, error) {
 			return runID, nil
 		},
+		executable: func() (string, error) {
+			return "/tmp/rtc-emulator", nil
+		},
+		runCommand: fakeScenarioWebRTCPeerCommand,
+		sleep:      func(context.Context, time.Duration) error { return nil },
 	}
+}
+
+func validScenarioTestDeps(ex *fakeExecutor) createDeps {
+	return impairmentTestDeps(ex, func(context.Context) (*LabState, error) {
+		return &LabState{Nodes: []string{"node1", "node2"}}, nil
+	})
+}
+
+func fakeScenarioWebRTCPeerCommand(_ context.Context, name string, args []string, _ io.Writer, _ io.Writer) error {
+	if name != "ip" {
+		return nil
+	}
+	runID := argValue(args, "--run-id")
+	runDir := argValue(args, "--run-dir")
+	node := argValue(args, "--node")
+	peer := argValue(args, "--peer")
+	state := &webRTCPeerRuntimeState{
+		peerConnection: "connected",
+		iceConnection:  "connected",
+	}
+	if err := writePeerConnectedMarker(runDir, WebRTCPeerOptions{
+		RunID: runID,
+		Node:  node,
+		Peer:  peer,
+	}, state); err != nil {
+		return err
+	}
+	statsTime := "2026-06-21T12:00:02Z"
+	if node == "node2" {
+		statsTime = "2026-06-21T12:00:01Z"
+	}
+	return writeOneStatsRecord(filepath.Join(runDir, peerStatsFilename(node)), WebRTCStatsRecord{
+		RunID:               runID,
+		Time:                statsTime,
+		Node:                node,
+		Peer:                peer,
+		PeerConnectionState: "connected",
+		ICEConnectionState:  "connected",
+	})
 }
 
 func readScenarioEvents(t *testing.T, path string) []EventRecord {

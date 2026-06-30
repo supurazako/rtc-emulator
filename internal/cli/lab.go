@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/supurazako/rtc-emulator/internal/lab"
+	"github.com/supurazako/rtc-emulator/internal/monitor"
+	"golang.org/x/term"
 )
 
 func newLabCmd() *cobra.Command {
@@ -148,29 +151,43 @@ func newLabScenarioCmd() *cobra.Command {
 func newLabScenarioRunCmd() *cobra.Command {
 	var runsDir string
 	var node string
+	var peer string
 	var delay string
 	var loss string
 	var jitter string
 	var bw string
+	var baseline time.Duration
+	var impaired time.Duration
+	var recovery time.Duration
+	var statsInterval time.Duration
+	var watch bool
 
 	cmd := &cobra.Command{
 		Use:   "run SCENARIO",
-		Short: "Run a named lab scenario and save event logs",
+		Short: "Run a WebRTC stats scenario with lab peer nodes",
+		Long:  "Run a named lab scenario, start headless Pion WebRTC peers in the lab namespaces, and save event and stats logs. This command does not require a browser, but it does require the Linux/root lab environment with both target and peer nodes available.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := lab.RunScenario(context.Background(), lab.ScenarioRunOptions{
-				Scenario: args[0],
-				RunsDir:  runsDir,
-				Node:     node,
-				Delay:    delay,
-				Loss:     loss,
-				Jitter:   jitter,
-				BW:       bw,
-			})
+			opts := lab.ScenarioRunOptions{
+				Scenario:         args[0],
+				RunsDir:          runsDir,
+				Node:             node,
+				Peer:             peer,
+				Delay:            delay,
+				Loss:             loss,
+				Jitter:           jitter,
+				BW:               bw,
+				BaselineDuration: baseline,
+				ImpairedDuration: impaired,
+				RecoveryDuration: recovery,
+				StatsInterval:    statsInterval,
+			}
+			if watch {
+				return runScenarioWithMonitor(cmd, opts)
+			}
+			result, err := lab.RunScenario(context.Background(), opts)
 			if result != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "run-id=%s\n", result.RunID)
-				fmt.Fprintf(cmd.OutOrStdout(), "run-dir=%s\n", result.RunDir)
-				fmt.Fprintf(cmd.OutOrStdout(), "events=%s\n", result.EventsPath)
+				printScenarioRunResult(cmd, result)
 			}
 			return err
 		},
@@ -178,12 +195,91 @@ func newLabScenarioRunCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&runsDir, "runs-dir", "runs", "directory for scenario run outputs")
 	cmd.Flags().StringVar(&node, "node", "node1", "target node")
+	cmd.Flags().StringVar(&peer, "peer", "node2", "WebRTC peer node used for stats collection")
 	cmd.Flags().StringVar(&delay, "delay", "", "delay setting")
 	cmd.Flags().StringVar(&loss, "loss", "", "packet loss setting")
 	cmd.Flags().StringVar(&jitter, "jitter", "", "jitter setting")
 	cmd.Flags().StringVar(&bw, "bw", "", "bandwidth setting")
+	cmd.Flags().DurationVar(&baseline, "baseline", 5*time.Second, "baseline phase duration")
+	cmd.Flags().DurationVar(&impaired, "impaired", 10*time.Second, "impaired phase duration")
+	cmd.Flags().DurationVar(&recovery, "recovery", 5*time.Second, "recovery phase duration")
+	cmd.Flags().DurationVar(&statsInterval, "stats-interval", time.Second, "WebRTC stats collection interval")
+	cmd.Flags().BoolVar(&watch, "watch", false, "show a live terminal dashboard while the scenario runs")
 
 	return cmd
+}
+
+func runScenarioWithMonitor(cmd *cobra.Command, opts lab.ScenarioRunOptions) error {
+	return runScenarioWithMonitorDeps(cmd, opts, scenarioMonitorDeps{
+		isTerminal: func() bool {
+			return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+		},
+		newMonitor: func() scenarioMonitor {
+			return monitor.New()
+		},
+		runScenario: lab.RunScenario,
+	})
+}
+
+type scenarioMonitor interface {
+	lab.ScenarioRunObserver
+	Finish(error)
+	Run(context.Context, context.CancelFunc) error
+}
+
+type scenarioMonitorDeps struct {
+	isTerminal  func() bool
+	newMonitor  func() scenarioMonitor
+	runScenario func(context.Context, lab.ScenarioRunOptions) (*lab.ScenarioRunResult, error)
+}
+
+func runScenarioWithMonitorDeps(cmd *cobra.Command, opts lab.ScenarioRunOptions, deps scenarioMonitorDeps) error {
+	if deps.isTerminal == nil {
+		deps.isTerminal = func() bool { return false }
+	}
+	if deps.newMonitor == nil {
+		deps.newMonitor = func() scenarioMonitor { return monitor.New() }
+	}
+	if deps.runScenario == nil {
+		deps.runScenario = lab.RunScenario
+	}
+	if !deps.isTerminal() {
+		return errors.New("--watch requires an interactive terminal")
+	}
+
+	mon := deps.newMonitor()
+	opts.Observer = mon
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type outcome struct {
+		result *lab.ScenarioRunResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := deps.runScenario(ctx, opts)
+		mon.Finish(err)
+		done <- outcome{result: result, err: err}
+	}()
+
+	monitorErr := mon.Run(ctx, cancel)
+	if monitorErr != nil {
+		cancel()
+	}
+	out := <-done
+	if out.result != nil {
+		printScenarioRunResult(cmd, out.result)
+	}
+	return errors.Join(out.err, monitorErr)
+}
+
+func printScenarioRunResult(cmd *cobra.Command, result *lab.ScenarioRunResult) {
+	fmt.Fprintf(cmd.OutOrStdout(), "run-id=%s\n", result.RunID)
+	fmt.Fprintf(cmd.OutOrStdout(), "run-dir=%s\n", result.RunDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "latest-dir=%s\n", result.LatestDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "events=%s\n", result.EventsPath)
+	fmt.Fprintf(cmd.OutOrStdout(), "stats=%s\n", result.StatsPath)
 }
 
 func newLabWebRTCCmd() *cobra.Command {

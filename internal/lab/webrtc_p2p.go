@@ -265,20 +265,59 @@ func runWebRTCPeerProcesses(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	type peerProc struct {
-		node   string
-		role   string
-		peer   string
-		err    error
-		stdout bytes.Buffer
-		stderr bytes.Buffer
+	waitPeers := launchWebRTCPeerProcesses(ctx, opts, runID, runDir, executable, deps, cancel)
+
+	readyErr := waitForWebRTCPeerReadiness(ctx, runDir, []string{opts.NodeA, opts.NodeB}, webRTCSignalTimeout)
+	if readyErr != nil {
+		cancel()
+	} else if onConnected != nil {
+		readyErr = onConnected()
+		if readyErr != nil {
+			cancel()
+		}
 	}
 
-	procs := []*peerProc{
+	return errors.Join(readyErr, waitPeers())
+}
+
+func startWebRTCPeerProcesses(
+	ctx context.Context,
+	opts WebRTCP2POptions,
+	runID string,
+	runDir string,
+	executable string,
+	deps webRTCP2PDeps,
+	cancel context.CancelFunc,
+) func() error {
+	if deps.runCommand == nil {
+		deps.runCommand = defaultWebRTCP2PDeps().runCommand
+	}
+
+	return launchWebRTCPeerProcesses(ctx, opts, runID, runDir, executable, deps, cancel)
+}
+
+type webRTCPeerProc struct {
+	node   string
+	role   string
+	peer   string
+	err    error
+	stdout bytes.Buffer
+	stderr bytes.Buffer
+}
+
+func launchWebRTCPeerProcesses(
+	ctx context.Context,
+	opts WebRTCP2POptions,
+	runID string,
+	runDir string,
+	executable string,
+	deps webRTCP2PDeps,
+	cancel context.CancelFunc,
+) func() error {
+	procs := []*webRTCPeerProc{
 		{node: opts.NodeB, role: webRTCPeerRoleAnswerer, peer: opts.NodeA},
 		{node: opts.NodeA, role: webRTCPeerRoleOfferer, peer: opts.NodeB},
 	}
-
 	var wg sync.WaitGroup
 	for _, proc := range procs {
 		proc := proc
@@ -294,31 +333,27 @@ func runWebRTCPeerProcesses(
 				Duration:      opts.Duration,
 				StatsInterval: opts.StatsInterval,
 			})
-			proc.err = deps.runCommand(ctx, "ip", args, &proc.stdout, &proc.stderr)
-			if proc.err != nil {
-				cancel()
+			if err := deps.runCommand(ctx, "ip", args, &proc.stdout, &proc.stderr); err != nil {
+				if ctx.Err() == nil {
+					proc.err = err
+					if cancel != nil {
+						cancel()
+					}
+				}
 			}
 		}()
 	}
 
-	readyErr := waitForWebRTCPeerReadiness(ctx, runDir, []string{opts.NodeA, opts.NodeB}, webRTCSignalTimeout)
-	if readyErr != nil {
-		cancel()
-	} else if onConnected != nil {
-		readyErr = onConnected()
-		if readyErr != nil {
-			cancel()
+	return func() error {
+		wg.Wait()
+		var runErr error
+		for _, proc := range procs {
+			if proc.err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("webrtc peer %s/%s failed: %w stdout=%q stderr=%q", proc.node, proc.role, proc.err, proc.stdout.String(), proc.stderr.String()))
+			}
 		}
+		return runErr
 	}
-	wg.Wait()
-
-	var runErr error = readyErr
-	for _, proc := range procs {
-		if proc.err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("webrtc peer %s/%s failed: %w stdout=%q stderr=%q", proc.node, proc.role, proc.err, proc.stdout.String(), proc.stderr.String()))
-		}
-	}
-	return runErr
 }
 
 func webRTCPeerNetNSArgs(node string, executable string, opts WebRTCPeerOptions) []string {
