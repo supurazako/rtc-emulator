@@ -239,6 +239,8 @@ func runScenarioWithDeps(
 		runErr = errors.Join(runErr, sleepPhase(ctx, runDeps, opts.RecoveryDuration))
 	} else if err := record("recovery", "skip", "skipped", nil); err != nil {
 		runErr = errors.Join(runErr, err)
+	} else {
+		runErr = errors.Join(runErr, sleepPhase(ctx, runDeps, opts.RecoveryDuration))
 	}
 
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), scenarioCleanupLimit)

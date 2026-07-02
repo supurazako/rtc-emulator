@@ -88,3 +88,54 @@ Confirm no leftovers:
 sudo ip netns list
 sudo ip link show rtcemu0
 ```
+
+## 6. Run the uplink congestion scenario
+
+Create a fresh 2-node lab, then run the named end-to-end scenario:
+
+```bash
+sudo ./bin/rtc-emulator lab create --nodes 2
+
+sudo ./bin/rtc-emulator lab scenario run webrtc-uplink-congestion \
+  --node node1 \
+  --peer node2 \
+  --bw 1mbit \
+  --baseline 5s \
+  --impaired 10s \
+  --recovery 5s \
+  --stats-interval 1s
+```
+
+Expected output:
+
+```text
+run-id=<run-id>
+run-dir=runs/<run-id>
+latest-dir=runs/latest
+events=runs/<run-id>/events.jsonl
+stats=runs/<run-id>/stats.jsonl
+```
+
+Check the phase window:
+
+```bash
+jq -r '.time + " " + .phase + " " + .status + " " + (.condition.bw // "")' runs/latest/events.jsonl
+```
+
+Check WebRTC-side counters near that window:
+
+```bash
+jq -r 'select(.node=="node1") | [.time,.bytes_sent,.data_messages_sent] | @tsv' runs/latest/stats.jsonl
+```
+
+Check cleanup state:
+
+```bash
+sudo ip netns exec node1 tc qdisc show dev eth0
+```
+
+Manual verification notes:
+
+- `impaired` should show `1mbit` for `node1`.
+- `cleanup` should leave no managed qdisc behind on `node1`.
+- compare `node1` `bytes_sent` deltas before, during, and after the impaired window; this DataChannel-only runner does not produce video frame counters.

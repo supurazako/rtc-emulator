@@ -375,7 +375,7 @@ func TestClearWithDeps_NamespaceGoneDuringDeleteFails(t *testing.T) {
 
 func validImpairmentTestDeps(ex *fakeExecutor) createDeps {
 	return impairmentTestDeps(ex, func(context.Context) (*LabState, error) {
-		return &LabState{Nodes: []string{"node1"}}, nil
+		return &LabState{Nodes: []string{"node1", "node2"}}, nil
 	})
 }
 
