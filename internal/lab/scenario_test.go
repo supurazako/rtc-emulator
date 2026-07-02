@@ -31,6 +31,16 @@ func TestRunScenarioWithDeps_WritesJSONLAndPhaseOrder(t *testing.T) {
 	if got.EventsPath != filepath.Join(runsDir, "run-test", "events.jsonl") {
 		t.Fatalf("unexpected events path: %s", got.EventsPath)
 	}
+	if got.StatsPath != filepath.Join(runsDir, "run-test", "stats.jsonl") {
+		t.Fatalf("unexpected stats path: %s", got.StatsPath)
+	}
+	latestTarget, err := os.Readlink(got.LatestDir)
+	if err != nil {
+		t.Fatalf("failed to read latest run link: %v", err)
+	}
+	if latestTarget != "run-test" {
+		t.Fatalf("latest run link = %s, want run-test", latestTarget)
+	}
 
 	events := readScenarioEvents(t, got.EventsPath)
 	assertPhases(t, events, []string{"baseline", "impaired", "recovery", "cleanup"})
@@ -50,6 +60,13 @@ func TestRunScenarioWithDeps_WritesJSONLAndPhaseOrder(t *testing.T) {
 	}
 	if countCall(ex.calls, "ip netns exec node1 tc qdisc del dev eth0 root") != 2 {
 		t.Fatalf("expected recovery and cleanup clear calls, calls=%v", ex.calls)
+	}
+	stats := readStatsRecords(t, got.StatsPath)
+	if len(stats) != 2 {
+		t.Fatalf("expected merged stats from two peers, got %+v", stats)
+	}
+	if stats[0].Node != "node2" || stats[1].Node != "node1" {
+		t.Fatalf("unexpected stats order: %+v", stats)
 	}
 }
 
@@ -148,10 +165,11 @@ func TestRunScenarioWithDeps_ClearFailureLoggedAsError(t *testing.T) {
 func TestRunScenarioWithDeps_LogWriteFailureReturnsErrorAndCleansUp(t *testing.T) {
 	ex := scenarioTestExecutor(nil)
 	writer := &failingWriteCloser{failOn: 2}
+	runsDir := filepath.Join(t.TempDir(), "runs")
 
 	_, err := runScenarioWithDeps(
 		context.Background(),
-		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: "runs"},
+		ScenarioRunOptions{Scenario: ScenarioWebRTCUplinkCongestion, RunsDir: runsDir},
 		validImpairmentTestDeps(ex),
 		scenarioRunDeps{
 			now: func() time.Time {
@@ -160,12 +178,15 @@ func TestRunScenarioWithDeps_LogWriteFailureReturnsErrorAndCleansUp(t *testing.T
 			newRunID: func(time.Time) (string, error) {
 				return "run-write-failure", nil
 			},
-			mkdirAll: func(string, os.FileMode) error {
-				return nil
-			},
+			mkdirAll: os.MkdirAll,
 			openFile: func(string, int, os.FileMode) (io.WriteCloser, error) {
 				return writer, nil
 			},
+			executable: func() (string, error) {
+				return "/tmp/rtc-emulator", nil
+			},
+			runCommand: fakeScenarioWebRTCPeerCommand,
+			sleep:      func(time.Duration) {},
 		},
 	)
 	if err == nil || !strings.Contains(err.Error(), "failed to write event log") {
@@ -184,7 +205,7 @@ func scenarioTestExecutor(runFn func(name string, args ...string) error) *fakeEx
 		runFn: runFn,
 		outputFn: func(name string, args ...string) (string, error) {
 			if callKey(name, args...) == "ip netns list" {
-				return "node1\n", nil
+				return "node1\nnode2\n", nil
 			}
 			return "", nil
 		},
@@ -199,7 +220,45 @@ func fixedScenarioRunDeps(runID string) scenarioRunDeps {
 		newRunID: func(time.Time) (string, error) {
 			return runID, nil
 		},
+		executable: func() (string, error) {
+			return "/tmp/rtc-emulator", nil
+		},
+		runCommand: fakeScenarioWebRTCPeerCommand,
+		sleep:      func(time.Duration) {},
 	}
+}
+
+func fakeScenarioWebRTCPeerCommand(_ context.Context, name string, args []string, _ io.Writer, _ io.Writer) error {
+	if name != "ip" {
+		return nil
+	}
+	runID := argValue(args, "--run-id")
+	runDir := argValue(args, "--run-dir")
+	node := argValue(args, "--node")
+	peer := argValue(args, "--peer")
+	state := &webRTCPeerRuntimeState{
+		peerConnection: "connected",
+		iceConnection:  "connected",
+	}
+	if err := writePeerConnectedMarker(runDir, WebRTCPeerOptions{
+		RunID: runID,
+		Node:  node,
+		Peer:  peer,
+	}, state); err != nil {
+		return err
+	}
+	statsTime := "2026-06-21T12:00:02Z"
+	if node == "node2" {
+		statsTime = "2026-06-21T12:00:01Z"
+	}
+	return writeOneStatsRecord(filepath.Join(runDir, peerStatsFilename(node)), WebRTCStatsRecord{
+		RunID:               runID,
+		Time:                statsTime,
+		Node:                node,
+		Peer:                peer,
+		PeerConnectionState: "connected",
+		ICEConnectionState:  "connected",
+	})
 }
 
 func readScenarioEvents(t *testing.T, path string) []EventRecord {
