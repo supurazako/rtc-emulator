@@ -263,8 +263,9 @@ func runWebRTCPeerProcesses(
 	onConnected func() error,
 ) error {
 	ctx, cancel := context.WithCancel(ctx)
-	wait := startWebRTCPeerProcesses(ctx, opts, runID, runDir, executable, deps, cancel)
 	defer cancel()
+
+	waitPeers := launchWebRTCPeerProcesses(ctx, opts, runID, runDir, executable, deps, cancel)
 
 	readyErr := waitForWebRTCPeerReadiness(ctx, runDir, []string{opts.NodeA, opts.NodeB}, webRTCSignalTimeout)
 	if readyErr != nil {
@@ -275,7 +276,8 @@ func runWebRTCPeerProcesses(
 			cancel()
 		}
 	}
-	return errors.Join(readyErr, wait())
+
+	return errors.Join(readyErr, waitPeers())
 }
 
 func startWebRTCPeerProcesses(
@@ -287,20 +289,35 @@ func startWebRTCPeerProcesses(
 	deps webRTCP2PDeps,
 	cancel context.CancelFunc,
 ) func() error {
-	type peerProc struct {
-		node   string
-		role   string
-		peer   string
-		err    error
-		stdout bytes.Buffer
-		stderr bytes.Buffer
+	if deps.runCommand == nil {
+		deps.runCommand = defaultWebRTCP2PDeps().runCommand
 	}
 
-	procs := []*peerProc{
+	return launchWebRTCPeerProcesses(ctx, opts, runID, runDir, executable, deps, cancel)
+}
+
+type webRTCPeerProc struct {
+	node   string
+	role   string
+	peer   string
+	err    error
+	stdout bytes.Buffer
+	stderr bytes.Buffer
+}
+
+func launchWebRTCPeerProcesses(
+	ctx context.Context,
+	opts WebRTCP2POptions,
+	runID string,
+	runDir string,
+	executable string,
+	deps webRTCP2PDeps,
+	cancel context.CancelFunc,
+) func() error {
+	procs := []*webRTCPeerProc{
 		{node: opts.NodeB, role: webRTCPeerRoleAnswerer, peer: opts.NodeA},
 		{node: opts.NodeA, role: webRTCPeerRoleOfferer, peer: opts.NodeB},
 	}
-
 	var wg sync.WaitGroup
 	for _, proc := range procs {
 		proc := proc
@@ -316,16 +333,19 @@ func startWebRTCPeerProcesses(
 				Duration:      opts.Duration,
 				StatsInterval: opts.StatsInterval,
 			})
-			proc.err = deps.runCommand(ctx, "ip", args, &proc.stdout, &proc.stderr)
-			if proc.err != nil {
-				cancel()
+			if err := deps.runCommand(ctx, "ip", args, &proc.stdout, &proc.stderr); err != nil {
+				if ctx.Err() == nil {
+					proc.err = err
+					if cancel != nil {
+						cancel()
+					}
+				}
 			}
 		}()
 	}
 
 	return func() error {
 		wg.Wait()
-
 		var runErr error
 		for _, proc := range procs {
 			if proc.err != nil {

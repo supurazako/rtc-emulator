@@ -23,6 +23,8 @@ const (
 	defaultBaseline      = 5 * time.Second
 	defaultImpaired      = 10 * time.Second
 	defaultRecovery      = 5 * time.Second
+	scenarioPeerSlack    = 5 * time.Second
+	scenarioCleanupLimit = 5 * time.Second
 )
 
 type ScenarioRunOptions struct {
@@ -39,6 +41,7 @@ type ScenarioRunOptions struct {
 	ImpairedDuration time.Duration
 	RecoveryDuration time.Duration
 	StatsInterval    time.Duration
+	Observer         ScenarioRunObserver
 }
 
 type ScenarioRunResult struct {
@@ -49,6 +52,26 @@ type ScenarioRunResult struct {
 	StatsPath  string
 }
 
+type ScenarioRunInfo struct {
+	RunID            string
+	RunDir           string
+	EventsPath       string
+	StatsPaths       []string
+	Scenario         string
+	Node             string
+	Peer             string
+	BaselineDuration time.Duration
+	ImpairedDuration time.Duration
+	RecoveryDuration time.Duration
+	StatsInterval    time.Duration
+	StartedAt        time.Time
+	Condition        ImpairmentCondition
+}
+
+type ScenarioRunObserver interface {
+	ScenarioRunStarted(ScenarioRunInfo)
+}
+
 type scenarioRunDeps struct {
 	now        func() time.Time
 	newRunID   func(time.Time) (string, error)
@@ -56,7 +79,7 @@ type scenarioRunDeps struct {
 	openFile   func(string, int, os.FileMode) (io.WriteCloser, error)
 	executable func() (string, error)
 	runCommand func(context.Context, string, []string, io.Writer, io.Writer) error
-	sleep      func(time.Duration)
+	sleep      func(context.Context, time.Duration) error
 }
 
 func RunScenario(ctx context.Context, opts ScenarioRunOptions) (*ScenarioRunResult, error) {
@@ -80,7 +103,7 @@ func runScenarioWithDeps(
 		RunsDir:       opts.RunsDir,
 		NodeA:         opts.Node,
 		NodeB:         opts.Peer,
-		Duration:      opts.BaselineDuration + opts.ImpairedDuration + opts.RecoveryDuration,
+		Duration:      opts.BaselineDuration + opts.ImpairedDuration + opts.RecoveryDuration + scenarioPeerSlack,
 		StatsInterval: opts.StatsInterval,
 	}
 	if err := validateWebRTCP2POptions(ctx, webRTCOpts, deps); err != nil {
@@ -118,6 +141,26 @@ func runScenarioWithDeps(
 		Jitter: opts.Jitter,
 		BW:     opts.BW,
 	}
+	if opts.Observer != nil {
+		opts.Observer.ScenarioRunStarted(ScenarioRunInfo{
+			RunID:      runID,
+			RunDir:     logger.runDir,
+			EventsPath: logger.eventsPath,
+			StatsPaths: []string{
+				filepath.Join(logger.runDir, peerStatsFilename(opts.Node)),
+				filepath.Join(logger.runDir, peerStatsFilename(opts.Peer)),
+			},
+			Scenario:         opts.Scenario,
+			Node:             opts.Node,
+			Peer:             opts.Peer,
+			BaselineDuration: opts.BaselineDuration,
+			ImpairedDuration: opts.ImpairedDuration,
+			RecoveryDuration: opts.RecoveryDuration,
+			StatsInterval:    opts.StatsInterval,
+			StartedAt:        startedAt,
+			Condition:        condition,
+		})
+	}
 
 	record := func(phase string, action string, status string, opErr error) error {
 		return logger.write(EventRecord{
@@ -143,6 +186,7 @@ func runScenarioWithDeps(
 	peerCtx, cancelPeers := context.WithCancel(ctx)
 	defer cancelPeers()
 	var waitPeers func() error
+	peersReady := false
 	if err == nil {
 		waitPeers = startWebRTCPeerProcesses(peerCtx, webRTCOpts, runID, logger.runDir, executable, webRTCP2PDeps{
 			runCommand: runDeps.runCommand,
@@ -150,30 +194,41 @@ func runScenarioWithDeps(
 		if readyErr := waitForWebRTCPeerReadiness(ctx, logger.runDir, []string{opts.Node, opts.Peer}, webRTCSignalTimeout); readyErr != nil {
 			runErr = errors.Join(runErr, readyErr)
 			cancelPeers()
+		} else {
+			peersReady = true
 		}
 	}
 
 	if err := record("baseline", "start", "ok", nil); err != nil {
 		return result, errors.Join(err, logger.close())
 	}
-	runDeps.sleep(opts.BaselineDuration)
+	if runErr == nil {
+		runErr = errors.Join(runErr, sleepPhase(ctx, runDeps, opts.BaselineDuration))
+	}
 
-	_, applyErr := applyWithDeps(ctx, ApplyOptions{
-		Node:   opts.Node,
-		Delay:  opts.Delay,
-		Loss:   opts.Loss,
-		Jitter: opts.Jitter,
-		BW:     opts.BW,
-	}, deps)
+	var applyErr error
+	if runErr == nil {
+		_, applyErr = applyWithDeps(ctx, ApplyOptions{
+			Node:   opts.Node,
+			Delay:  opts.Delay,
+			Loss:   opts.Loss,
+			Jitter: opts.Jitter,
+			BW:     opts.BW,
+		}, deps)
+	} else {
+		applyErr = runErr
+	}
 	if applyErr != nil {
 		runErr = errors.Join(runErr, fmt.Errorf("impaired phase failed: %w", applyErr))
 	}
 	if err := record("impaired", "apply", statusForError(applyErr), applyErr); err != nil {
 		runErr = errors.Join(runErr, err)
 	}
-	runDeps.sleep(opts.ImpairedDuration)
-
 	if applyErr == nil {
+		runErr = errors.Join(runErr, sleepPhase(ctx, runDeps, opts.ImpairedDuration))
+	}
+
+	if applyErr == nil && ctx.Err() == nil {
 		recoveryResult, recoveryErr := clearWithDeps(ctx, ClearOptions{Node: opts.Node}, deps)
 		if recoveryErr != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("recovery phase failed: %w", recoveryErr))
@@ -181,32 +236,36 @@ func runScenarioWithDeps(
 		if err := record("recovery", "clear", statusForClear(recoveryResult, recoveryErr), recoveryErr); err != nil {
 			runErr = errors.Join(runErr, err)
 		}
-		runDeps.sleep(opts.RecoveryDuration)
+		runErr = errors.Join(runErr, sleepPhase(ctx, runDeps, opts.RecoveryDuration))
 	} else if err := record("recovery", "skip", "skipped", nil); err != nil {
 		runErr = errors.Join(runErr, err)
 	} else {
-		runDeps.sleep(opts.RecoveryDuration)
+		runErr = errors.Join(runErr, sleepPhase(ctx, runDeps, opts.RecoveryDuration))
 	}
 
-	cleanupResult, cleanupErr := clearWithDeps(ctx, ClearOptions{Node: opts.Node}, deps)
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), scenarioCleanupLimit)
+	cleanupResult, cleanupErr := clearWithDeps(cleanupCtx, ClearOptions{Node: opts.Node}, deps)
+	cleanupCancel()
 	if cleanupErr != nil {
 		runErr = errors.Join(runErr, fmt.Errorf("cleanup phase failed: %w", cleanupErr))
 	}
 	if err := record("cleanup", "clear", statusForClear(cleanupResult, cleanupErr), cleanupErr); err != nil {
 		runErr = errors.Join(runErr, err)
 	}
+	cancelPeers()
 	if waitPeers != nil {
 		if err := waitPeers(); err != nil {
 			runErr = errors.Join(runErr, err)
 		}
 	}
-	cancelPeers()
-	mergeErr := mergeStatsLogs(result.StatsPath, []string{
-		filepath.Join(logger.runDir, peerStatsFilename(opts.Node)),
-		filepath.Join(logger.runDir, peerStatsFilename(opts.Peer)),
-	})
-	if mergeErr != nil {
-		runErr = errors.Join(runErr, fmt.Errorf("failed to merge peer stats logs: %w", mergeErr))
+	if peersReady {
+		mergeErr := mergeStatsLogs(result.StatsPath, []string{
+			filepath.Join(logger.runDir, peerStatsFilename(opts.Node)),
+			filepath.Join(logger.runDir, peerStatsFilename(opts.Peer)),
+		})
+		if mergeErr != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("failed to merge peer stats logs: %w", mergeErr))
+		}
 	}
 	if err := logger.close(); err != nil {
 		runErr = errors.Join(runErr, err)
@@ -314,9 +373,25 @@ func fillScenarioRunDeps(deps scenarioRunDeps) scenarioRunDeps {
 		}
 	}
 	if deps.sleep == nil {
-		deps.sleep = time.Sleep
+		deps.sleep = func(ctx context.Context, d time.Duration) error {
+			timer := time.NewTimer(d)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+				return nil
+			}
+		}
 	}
 	return deps
+}
+
+func sleepPhase(ctx context.Context, deps scenarioRunDeps, d time.Duration) error {
+	if err := deps.sleep(ctx, d); err != nil {
+		return fmt.Errorf("phase wait interrupted: %w", err)
+	}
+	return nil
 }
 
 func statusForError(err error) string {
