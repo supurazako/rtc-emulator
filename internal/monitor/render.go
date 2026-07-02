@@ -38,12 +38,12 @@ func (m liveModel) dashboardView() string {
 	}
 
 	row1 := joinColumns(
-		renderChart("send bitrate", s.Bitrate.CurrentText, s.Bitrate.Values, chartWidth, chartHeight),
-		renderChart("RTT", s.RTT.CurrentText, s.RTT.Values, chartWidth, chartHeight),
+		renderChart(s.Bitrate, s.WindowStart, s.WindowEnd, s.StartedAt, chartWidth, chartHeight),
+		renderChart(s.RTT, s.WindowStart, s.WindowEnd, s.StartedAt, chartWidth, chartHeight),
 	)
 	row2 := joinColumns(
-		renderChart("jitter", s.Jitter.CurrentText, s.Jitter.Values, chartWidth, chartHeight),
-		renderChart("packet loss", s.PacketLoss.CurrentText, s.PacketLoss.Values, chartWidth, chartHeight),
+		renderChart(s.Jitter, s.WindowStart, s.WindowEnd, s.StartedAt, chartWidth, chartHeight),
+		renderChart(s.PacketLoss, s.WindowStart, s.WindowEnd, s.StartedAt, chartWidth, chartHeight),
 	)
 
 	footer := "\nrecent events:\n"
@@ -61,7 +61,7 @@ func (m liveModel) compactView() string {
 	b.WriteString(fitLine(fmt.Sprintf("rtc-emulator live   %s   phase=%s   elapsed=%s", s.Scenario, displayOrDash(s.Phase), formatDuration(s.Elapsed)), width) + "\n")
 	b.WriteString(fitLine(fmt.Sprintf("terminal %dx%d; %dx%d recommended for full charts", m.width, m.height, minWidth, minHeight), width) + "\n\n")
 	for _, metric := range []Metric{s.Bitrate, s.RTT, s.Jitter, s.PacketLoss} {
-		b.WriteString(fitLine(fmt.Sprintf("%-14s %12s  %s", metric.Name, metric.CurrentText, sparkline(metric.Values, 30)), width) + "\n")
+		b.WriteString(fitLine(fmt.Sprintf("%-14s %12s  %s", metric.Name, metric.CurrentText, sparkline(metricValues(metric.Points), 30)), width) + "\n")
 	}
 	b.WriteString("\n" + fitLine(fmt.Sprintf("event=%s pc=%s ice=%s", displayOrDash(s.LastEvent), displayOrDash(s.PeerConnectionState), displayOrDash(s.ICEConnectionState)), width) + "\n")
 	if m.readErr != nil {
@@ -71,65 +71,88 @@ func (m liveModel) compactView() string {
 	return b.String()
 }
 
-func renderChart(title string, current string, values []float64, width int, height int) string {
+func renderChart(metric Metric, windowStart time.Time, windowEnd time.Time, startedAt time.Time, width int, height int) string {
 	innerWidth := max(10, width-4)
-	lines := []string{chartHeader(title, current, width)}
+	lines := []string{chartHeader(metric, width)}
+	visiblePoints := pointsInWindow(metric.Points, windowStart, windowEnd)
 
-	if len(values) == 0 {
+	if len(visiblePoints) == 0 {
 		for _, line := range emptyChartLines(innerWidth, height) {
 			lines = append(lines, "│ "+padRight(line, width-4)+" │")
 		}
-		lines = append(lines, chartFooter(width))
+		lines = append(lines, chartFooter(width, windowStart, windowEnd, startedAt))
 		return strings.Join(lines, "\n")
 	}
 
-	graph := renderLineChart(values, innerWidth, height)
+	graph := renderLineChart(visiblePoints, windowStart, windowEnd, innerWidth, height)
 	for _, line := range strings.Split(graph, "\n") {
 		lines = append(lines, "│ "+padRight(line, width-4)+" │")
 	}
-	lines = append(lines, chartFooter(width))
+	lines = append(lines, chartFooter(width, windowStart, windowEnd, startedAt))
 	return strings.Join(lines, "\n")
 }
 
-func renderLineChart(values []float64, width int, height int) string {
+func renderLineChart(points []MetricPoint, windowStart time.Time, windowEnd time.Time, width int, height int) string {
 	width = max(2, width)
 	height = max(2, height)
-	points := chartPoints(values, width)
-	minY, maxY := minMax(points)
-	if minY == maxY {
-		minY--
-		maxY++
-	}
-	maxX := float64(len(points) - 1)
-	if maxX == 0 {
-		maxX = 1
+	values := metricValues(points)
+	minY, maxY := minMax(values)
+	minY, maxY = paddedRange(minY, maxY)
+	maxX := windowEnd.Sub(windowStart).Seconds()
+	if maxX <= 0 {
+		maxX = historyWindow.Seconds()
 	}
 
 	chart := linechart.New(width, height, 0, maxX, minY, maxY,
 		linechart.WithXYSteps(0, 0),
 	)
-	prev := canvas.Float64Point{X: 0, Y: points[0]}
+	prev := chartPoint(points[0], windowStart, maxX)
 	chart.DrawRune(prev, '•')
-	for i, value := range points[1:] {
-		next := canvas.Float64Point{X: float64(i + 1), Y: value}
+	for _, point := range points[1:] {
+		next := chartPoint(point, windowStart, maxX)
 		chart.DrawLine(prev, next, runes.ThinLineStyle)
 		prev = next
 	}
 	return chart.View()
 }
 
-func chartPoints(values []float64, width int) []float64 {
-	if len(values) <= width {
-		return values
+func chartPoint(point MetricPoint, windowStart time.Time, maxX float64) canvas.Float64Point {
+	x := point.Time.Sub(windowStart).Seconds()
+	if x < 0 {
+		x = 0
 	}
-	out := make([]float64, width)
-	lastValue := len(values) - 1
-	lastPoint := width - 1
-	for i := range out {
-		idx := int(math.Round(float64(i) * float64(lastValue) / float64(lastPoint)))
-		out[i] = values[clamp(idx, 0, lastValue)]
+	if x > maxX {
+		x = maxX
+	}
+	return canvas.Float64Point{X: x, Y: point.Value}
+}
+
+func paddedRange(minY float64, maxY float64) (float64, float64) {
+	if minY == maxY {
+		minY--
+		maxY++
+	}
+	padding := (maxY - minY) * 0.1
+	return minY - padding, maxY + padding
+}
+
+func pointsInWindow(points []MetricPoint, windowStart time.Time, windowEnd time.Time) []MetricPoint {
+	out := make([]MetricPoint, 0, len(points))
+	for _, point := range points {
+		if point.Time.Before(windowStart) || point.Time.After(windowEnd) {
+			continue
+		}
+		out = append(out, point)
 	}
 	return out
+}
+
+func metricValues(points []MetricPoint) []float64 {
+	values := make([]float64, 0, len(points))
+	for _, point := range points {
+		values = append(values, point.Value)
+	}
+	return values
 }
 
 func emptyChartLines(width int, height int) []string {
@@ -146,8 +169,12 @@ func emptyChartLines(width int, height int) []string {
 	return lines
 }
 
-func chartHeader(title string, current string, width int) string {
-	header := fmt.Sprintf("┌ %-18s %12s ", title, current)
+func chartHeader(metric Metric, width int) string {
+	headerValue := metric.CurrentText
+	if metric.MaxText != "" {
+		headerValue = strings.TrimSpace(headerValue + "  " + metric.MaxText)
+	}
+	header := fmt.Sprintf("┌ %-18s %s ", metric.Name, headerValue)
 	header = truncateRunes(header, width-1)
 	return header + strings.Repeat("─", max(0, width-runeLen(header)-1)) + "┐"
 }
@@ -156,10 +183,33 @@ func fitLine(value string, width int) string {
 	return padRight(truncateRunes(value, width), width)
 }
 
-func chartFooter(width int) string {
-	footer := "└ 60s ago"
-	footer += strings.Repeat(" ", max(1, width-runeLen(footer)-8))
-	return footer + "now ┘"
+func chartFooter(width int, windowStart time.Time, windowEnd time.Time, startedAt time.Time) string {
+	footer := []rune(padRight("└ 60s ago", width))
+	writeRight(footer, "now ┘")
+	windowSeconds := windowEnd.Sub(windowStart).Seconds()
+	if windowSeconds > 0 && startedAt.After(windowStart) && startedAt.Before(windowEnd) {
+		x := int(math.Round(startedAt.Sub(windowStart).Seconds() / windowSeconds * float64(width-1)))
+		maxStartX := width - runeLen("now ┘") - runeLen(" start")
+		writeAt(footer, clamp(x, 0, maxStartX), "start")
+	}
+	return string(footer)
+}
+
+func writeRight(line []rune, value string) {
+	writeAt(line, max(0, len(line)-runeLen(value)), value)
+}
+
+func writeAt(line []rune, idx int, value string) {
+	if idx < 0 || idx >= len(line) {
+		return
+	}
+	for _, r := range value {
+		if idx >= len(line) {
+			return
+		}
+		line[idx] = r
+		idx++
+	}
 }
 
 func joinColumns(left string, right string) string {

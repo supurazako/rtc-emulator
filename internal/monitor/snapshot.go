@@ -14,6 +14,9 @@ type Snapshot struct {
 	Scenario            string
 	Phase               string
 	LastEvent           string
+	StartedAt           time.Time
+	WindowStart         time.Time
+	WindowEnd           time.Time
 	Elapsed             time.Duration
 	PeerConnectionState string
 	ICEConnectionState  string
@@ -26,7 +29,13 @@ type Snapshot struct {
 type Metric struct {
 	Name        string
 	CurrentText string
-	Values      []float64
+	MaxText     string
+	Points      []MetricPoint
+}
+
+type MetricPoint struct {
+	Time  time.Time
+	Value float64
 }
 
 func BuildSnapshot(info lab.ScenarioRunInfo, events []lab.EventRecord, stats []lab.WebRTCStatsRecord, now time.Time) Snapshot {
@@ -38,13 +47,16 @@ func BuildSnapshot(info lab.ScenarioRunInfo, events []lab.EventRecord, stats []l
 	})
 
 	snapshot := Snapshot{
-		Scenario:   info.Scenario,
-		Phase:      "starting",
-		Elapsed:    maxDuration(0, now.Sub(info.StartedAt)),
-		Bitrate:    Metric{Name: "send bitrate"},
-		RTT:        Metric{Name: "RTT"},
-		Jitter:     Metric{Name: "jitter"},
-		PacketLoss: Metric{Name: "packet loss"},
+		Scenario:    info.Scenario,
+		Phase:       "starting",
+		StartedAt:   info.StartedAt,
+		WindowStart: now.Add(-historyWindow),
+		WindowEnd:   now,
+		Elapsed:     maxDuration(0, now.Sub(info.StartedAt)),
+		Bitrate:     Metric{Name: "send bitrate"},
+		RTT:         Metric{Name: "RTT"},
+		Jitter:      Metric{Name: "jitter"},
+		PacketLoss:  Metric{Name: "packet loss"},
 	}
 	if len(events) > 0 {
 		last := events[len(events)-1]
@@ -75,14 +87,22 @@ func BuildSnapshot(info lab.ScenarioRunInfo, events []lab.EventRecord, stats []l
 	})
 	loss := derivePacketLossDelta(nodeStats, cutoff)
 
-	snapshot.Bitrate.Values = bitrate
-	snapshot.Bitrate.CurrentText = formatCurrent(lastFloat(bitrate), "Mbps", 2)
-	snapshot.RTT.Values = rtt
-	snapshot.RTT.CurrentText = formatCurrent(lastFloat(rtt), "ms", 0)
-	snapshot.Jitter.Values = jitter
-	snapshot.Jitter.CurrentText = formatCurrent(lastFloat(jitter), "ms", 0)
-	snapshot.PacketLoss.Values = loss
+	snapshot.Bitrate.Points = bitrate
+	snapshot.Bitrate.CurrentText = formatCurrent(lastMetricValue(bitrate), "Mbps", 2)
+	snapshot.Bitrate.MaxText = formatMaxMetric(bitrate, "Mbps", 2)
+	snapshot.RTT.Points = rtt
+	snapshot.RTT.CurrentText = formatCurrent(lastMetricValue(rtt), "ms", 0)
+	snapshot.RTT.MaxText = formatMaxMetric(rtt, "ms", 0)
+	snapshot.Jitter.Points = jitter
+	if len(jitter) == 0 && len(nodeStats) > 0 && !hasRTPStats(nodeStats) {
+		snapshot.Jitter.CurrentText = "no RTP"
+	} else {
+		snapshot.Jitter.CurrentText = formatCurrent(lastMetricValue(jitter), "ms", 0)
+	}
+	snapshot.Jitter.MaxText = formatMaxMetric(jitter, "ms", 0)
+	snapshot.PacketLoss.Points = loss
 	snapshot.PacketLoss.CurrentText = formatPacketLoss(nodeStats)
+	snapshot.PacketLoss.MaxText = formatMaxMetric(loss, "", 0)
 	return snapshot
 }
 
@@ -99,8 +119,8 @@ func statsForNode(stats []lab.WebRTCStatsRecord, node string) []lab.WebRTCStatsR
 	return nodeStats
 }
 
-func deriveBitrate(records []lab.WebRTCStatsRecord, cutoff time.Time) []float64 {
-	values := make([]float64, 0, len(records))
+func deriveBitrate(records []lab.WebRTCStatsRecord, cutoff time.Time) []MetricPoint {
+	points := make([]MetricPoint, 0, len(records))
 	var prev *lab.WebRTCStatsRecord
 	for i := range records {
 		record := records[i]
@@ -114,17 +134,20 @@ func deriveBitrate(records []lab.WebRTCStatsRecord, cutoff time.Time) []float64 
 				seconds := t.Sub(prevT).Seconds()
 				bytesDelta := int64(*record.BytesSent) - int64(*prev.BytesSent)
 				if seconds > 0 && bytesDelta >= 0 {
-					values = append(values, float64(bytesDelta)*8/seconds/1_000_000)
+					points = append(points, MetricPoint{
+						Time:  t,
+						Value: float64(bytesDelta) * 8 / seconds / 1_000_000,
+					})
 				}
 			}
 		}
 		prev = &record
 	}
-	return values
+	return points
 }
 
-func valuesFromStats(records []lab.WebRTCStatsRecord, cutoff time.Time, value func(lab.WebRTCStatsRecord) (float64, bool)) []float64 {
-	values := make([]float64, 0, len(records))
+func valuesFromStats(records []lab.WebRTCStatsRecord, cutoff time.Time, value func(lab.WebRTCStatsRecord) (float64, bool)) []MetricPoint {
+	points := make([]MetricPoint, 0, len(records))
 	for _, record := range records {
 		t, ok := parseTime(record.Time)
 		if !ok || t.Before(cutoff) {
@@ -132,14 +155,14 @@ func valuesFromStats(records []lab.WebRTCStatsRecord, cutoff time.Time, value fu
 		}
 		v, ok := value(record)
 		if ok && !math.IsNaN(v) && !math.IsInf(v, 0) {
-			values = append(values, v)
+			points = append(points, MetricPoint{Time: t, Value: v})
 		}
 	}
-	return values
+	return points
 }
 
-func derivePacketLossDelta(records []lab.WebRTCStatsRecord, cutoff time.Time) []float64 {
-	values := make([]float64, 0, len(records))
+func derivePacketLossDelta(records []lab.WebRTCStatsRecord, cutoff time.Time) []MetricPoint {
+	points := make([]MetricPoint, 0, len(records))
 	var prev *lab.WebRTCStatsRecord
 	for i := range records {
 		record := records[i]
@@ -150,12 +173,21 @@ func derivePacketLossDelta(records []lab.WebRTCStatsRecord, cutoff time.Time) []
 		if prev != nil && prev.PacketsLost != nil {
 			delta := *record.PacketsLost - *prev.PacketsLost
 			if delta >= 0 {
-				values = append(values, float64(delta))
+				points = append(points, MetricPoint{Time: t, Value: float64(delta)})
 			}
 		}
 		prev = &record
 	}
-	return values
+	return points
+}
+
+func hasRTPStats(records []lab.WebRTCStatsRecord) bool {
+	for _, record := range records {
+		if record.PacketsLost != nil || record.Jitter != nil || record.FramesSent != nil || record.FramesReceived != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func formatCurrent(value float64, unit string, precision int) string {
@@ -165,9 +197,27 @@ func formatCurrent(value float64, unit string, precision int) string {
 	return fmt.Sprintf("%.*f %s", precision, value, unit)
 }
 
+func formatMaxMetric(points []MetricPoint, unit string, precision int) string {
+	if len(points) == 0 {
+		return ""
+	}
+	return "max " + formatMetricValue(maxMetricValue(points), unit, precision)
+}
+
+func formatMetricValue(value float64, unit string, precision int) string {
+	formatted := fmt.Sprintf("%.*f", precision, value)
+	if unit == "" {
+		return formatted
+	}
+	return formatted + " " + unit
+}
+
 func formatPacketLoss(records []lab.WebRTCStatsRecord) string {
 	if len(records) == 0 {
 		return "collecting"
+	}
+	if !hasRTPStats(records) {
+		return "no RTP"
 	}
 	var last *int64
 	var prev *int64
@@ -205,11 +255,21 @@ func conditionText(condition lab.ImpairmentCondition) string {
 	return strings.Join(parts, " ")
 }
 
-func lastFloat(values []float64) float64 {
-	if len(values) == 0 {
+func lastMetricValue(points []MetricPoint) float64 {
+	if len(points) == 0 {
 		return math.NaN()
 	}
-	return values[len(values)-1]
+	return points[len(points)-1].Value
+}
+
+func maxMetricValue(points []MetricPoint) float64 {
+	maxValue := points[0].Value
+	for _, point := range points[1:] {
+		if point.Value > maxValue {
+			maxValue = point.Value
+		}
+	}
+	return maxValue
 }
 
 func parseTime(value string) (time.Time, bool) {
