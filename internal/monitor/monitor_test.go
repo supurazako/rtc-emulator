@@ -222,6 +222,31 @@ func TestChartPointUsesRollingTimeWindow(t *testing.T) {
 	}
 }
 
+func TestDashboardLayoutScalesWithTerminalSize(t *testing.T) {
+	got := dashboardLayoutFor(160, 48)
+	if got.width != 160 {
+		t.Fatalf("width = %d, want 160", got.width)
+	}
+	if got.chartWidth != 79 {
+		t.Fatalf("chart width = %d, want 79", got.chartWidth)
+	}
+	if got.chartHeight <= minChartHeight {
+		t.Fatalf("chart height = %d, want larger than minimum", got.chartHeight)
+	}
+}
+
+func TestDashboardLayoutKeepsMinimumAndCapsHeight(t *testing.T) {
+	small := dashboardLayoutFor(0, 0)
+	if small.chartWidth < minChartWidth || small.chartHeight != minChartHeight {
+		t.Fatalf("small layout = %+v, want minimum chart dimensions", small)
+	}
+
+	tall := dashboardLayoutFor(200, 120)
+	if tall.chartHeight != maxChartHeight {
+		t.Fatalf("tall chart height = %d, want cap %d", tall.chartHeight, maxChartHeight)
+	}
+}
+
 func TestRenderChartHandlesSmallDimensions(t *testing.T) {
 	now := time.Date(2026, 6, 30, 12, 0, 10, 0, time.UTC)
 	got := renderChart(Metric{Name: "RTT", CurrentText: "5 ms", Points: metricPoints(now.Add(-time.Second), 1, 2)}, now.Add(-historyWindow), now, now.Add(-10*time.Second), 8, 1)

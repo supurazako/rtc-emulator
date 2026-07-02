@@ -14,13 +14,18 @@ import (
 )
 
 const (
-	chartWidth  = 56
-	chartHeight = 8
+	defaultDashboardWidth = 114
+	minChartWidth         = 56
+	minChartHeight        = 8
+	maxChartHeight        = 18
+	chartColumnGap        = 2
+	dashboardFixedLines   = 13
 )
 
 func (m liveModel) dashboardView() string {
 	s := m.snapshot
-	width := chartWidth*2 + 2
+	layout := dashboardLayoutFor(m.width, m.height)
+	width := layout.width
 	top := fitLine(fmt.Sprintf(
 		"rtc-emulator live   %s   phase=%s   elapsed=%s",
 		s.Scenario,
@@ -38,12 +43,12 @@ func (m liveModel) dashboardView() string {
 	}
 
 	row1 := joinColumns(
-		renderChart(s.Bitrate, s.WindowStart, s.WindowEnd, s.StartedAt, chartWidth, chartHeight),
-		renderChart(s.RTT, s.WindowStart, s.WindowEnd, s.StartedAt, chartWidth, chartHeight),
+		renderChart(s.Bitrate, s.WindowStart, s.WindowEnd, s.StartedAt, layout.chartWidth, layout.chartHeight),
+		renderChart(s.RTT, s.WindowStart, s.WindowEnd, s.StartedAt, layout.chartWidth, layout.chartHeight),
 	)
 	row2 := joinColumns(
-		renderChart(s.Jitter, s.WindowStart, s.WindowEnd, s.StartedAt, chartWidth, chartHeight),
-		renderChart(s.PacketLoss, s.WindowStart, s.WindowEnd, s.StartedAt, chartWidth, chartHeight),
+		renderChart(s.Jitter, s.WindowStart, s.WindowEnd, s.StartedAt, layout.chartWidth, layout.chartHeight),
+		renderChart(s.PacketLoss, s.WindowStart, s.WindowEnd, s.StartedAt, layout.chartWidth, layout.chartHeight),
 	)
 
 	footer := "\nrecent events:\n"
@@ -52,6 +57,35 @@ func (m liveModel) dashboardView() string {
 	}
 	footer += "\nq / ctrl+c: stop scenario and cleanup\n"
 	return top + row1 + "\n" + row2 + footer
+}
+
+type dashboardLayout struct {
+	width       int
+	chartWidth  int
+	chartHeight int
+}
+
+func dashboardLayoutFor(termWidth int, termHeight int) dashboardLayout {
+	width := termWidth
+	if width <= 0 {
+		width = defaultDashboardWidth
+	}
+	width = max(minWidth, width)
+	chartWidth := max(minChartWidth, (width-chartColumnGap)/2)
+	width = chartWidth*2 + chartColumnGap
+
+	chartHeight := minChartHeight
+	if termHeight > 0 {
+		available := termHeight - dashboardFixedLines
+		if available > 0 {
+			chartHeight = clamp(available/2, minChartHeight, maxChartHeight)
+		}
+	}
+	return dashboardLayout{
+		width:       width,
+		chartWidth:  chartWidth,
+		chartHeight: chartHeight,
+	}
 }
 
 func (m liveModel) compactView() string {
@@ -217,8 +251,9 @@ func joinColumns(left string, right string) string {
 	rightLines := strings.Split(right, "\n")
 	n := max(len(leftLines), len(rightLines))
 	out := make([]string, 0, n)
+	gap := strings.Repeat(" ", chartColumnGap)
 	for i := 0; i < n; i++ {
-		out = append(out, lineAt(leftLines, i)+"  "+lineAt(rightLines, i))
+		out = append(out, lineAt(leftLines, i)+gap+lineAt(rightLines, i))
 	}
 	return strings.Join(out, "\n")
 }
