@@ -3,6 +3,7 @@ package monitor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +88,35 @@ func TestRenderChartHandlesEmptyValues(t *testing.T) {
 	if got == "" {
 		t.Fatalf("expected chart output")
 	}
+	if !contains(got, "collecting...") {
+		t.Fatalf("chart = %q, want collecting placeholder", got)
+	}
+}
+
+func TestRenderChartHandlesLineValues(t *testing.T) {
+	tests := map[string][]float64{
+		"increasing": {1, 2, 3, 4, 5},
+		"decreasing": {5, 4, 3, 2, 1},
+		"flat":       {3, 3, 3, 3, 3},
+	}
+	for name, values := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := renderChart("RTT", "5 ms", values, 40, 4)
+			if got == "" {
+				t.Fatalf("expected chart output")
+			}
+			if !contains(got, "RTT") {
+				t.Fatalf("chart = %q, want title", got)
+			}
+		})
+	}
+}
+
+func TestRenderChartHandlesSmallDimensions(t *testing.T) {
+	got := renderChart("RTT", "5 ms", []float64{1, 2}, 8, 1)
+	if got == "" {
+		t.Fatalf("expected chart output")
+	}
 }
 
 func TestReadStatsFromOnlyReturnsAppendedRecords(t *testing.T) {
@@ -136,4 +166,8 @@ func int64Ptr(v int64) *int64 {
 
 func float64Ptr(v float64) *float64 {
 	return &v
+}
+
+func contains(value string, substr string) bool {
+	return strings.Contains(value, substr)
 }

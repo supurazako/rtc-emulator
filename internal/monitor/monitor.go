@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/supurazako/rtc-emulator/internal/lab"
 )
 
@@ -49,7 +49,7 @@ func (m *Monitor) Run(ctx context.Context, cancel context.CancelFunc) error {
 		finished: m.finished,
 		cancel:   cancel,
 	}
-	_, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
+	_, err := tea.NewProgram(model).Run()
 	return err
 }
 
@@ -107,14 +107,18 @@ func (m liveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m liveModel) View() string {
+func (m liveModel) View() tea.View {
+	var content string
 	if m.info == nil {
-		return "rtc-emulator live monitor\n\nwaiting for scenario run...\n\nq / ctrl+c: stop\n"
+		content = "rtc-emulator live monitor\n\nwaiting for scenario run...\n\nq / ctrl+c: stop\n"
+	} else if m.width > 0 && m.height > 0 && (m.width < minWidth || m.height < minHeight) {
+		content = m.compactView()
+	} else {
+		content = m.dashboardView()
 	}
-	if m.width > 0 && m.height > 0 && (m.width < minWidth || m.height < minHeight) {
-		return m.compactView()
-	}
-	return m.dashboardView()
+	view := tea.NewView(content)
+	view.AltScreen = true
+	return view
 }
 
 func (m *liveModel) refresh(now time.Time) {

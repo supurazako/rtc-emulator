@@ -7,7 +7,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/guptarohit/asciigraph"
+	"github.com/NimbleMarkets/ntcharts/v2/canvas"
+	"github.com/NimbleMarkets/ntcharts/v2/canvas/runes"
+	"github.com/NimbleMarkets/ntcharts/v2/linechart"
 	"github.com/supurazako/rtc-emulator/internal/lab"
 )
 
@@ -71,19 +73,77 @@ func (m liveModel) compactView() string {
 
 func renderChart(title string, current string, values []float64, width int, height int) string {
 	innerWidth := max(10, width-4)
-	graph := asciigraph.Plot(valuesOrZero(values),
-		asciigraph.Width(innerWidth),
-		asciigraph.Height(height),
-		asciigraph.Offset(0),
-		asciigraph.Precision(1),
-	)
-
 	lines := []string{chartHeader(title, current, width)}
+
+	if len(values) == 0 {
+		for _, line := range emptyChartLines(innerWidth, height) {
+			lines = append(lines, "│ "+padRight(line, width-4)+" │")
+		}
+		lines = append(lines, chartFooter(width))
+		return strings.Join(lines, "\n")
+	}
+
+	graph := renderLineChart(values, innerWidth, height)
 	for _, line := range strings.Split(graph, "\n") {
 		lines = append(lines, "│ "+padRight(line, width-4)+" │")
 	}
 	lines = append(lines, chartFooter(width))
 	return strings.Join(lines, "\n")
+}
+
+func renderLineChart(values []float64, width int, height int) string {
+	width = max(2, width)
+	height = max(2, height)
+	points := chartPoints(values, width)
+	minY, maxY := minMax(points)
+	if minY == maxY {
+		minY--
+		maxY++
+	}
+	maxX := float64(len(points) - 1)
+	if maxX == 0 {
+		maxX = 1
+	}
+
+	chart := linechart.New(width, height, 0, maxX, minY, maxY,
+		linechart.WithXYSteps(0, 0),
+	)
+	prev := canvas.Float64Point{X: 0, Y: points[0]}
+	chart.DrawRune(prev, '•')
+	for i, value := range points[1:] {
+		next := canvas.Float64Point{X: float64(i + 1), Y: value}
+		chart.DrawLine(prev, next, runes.ThinLineStyle)
+		prev = next
+	}
+	return chart.View()
+}
+
+func chartPoints(values []float64, width int) []float64 {
+	if len(values) <= width {
+		return values
+	}
+	out := make([]float64, width)
+	lastValue := len(values) - 1
+	lastPoint := width - 1
+	for i := range out {
+		idx := int(math.Round(float64(i) * float64(lastValue) / float64(lastPoint)))
+		out[i] = values[clamp(idx, 0, lastValue)]
+	}
+	return out
+}
+
+func emptyChartLines(width int, height int) []string {
+	lines := make([]string, max(2, height))
+	mid := len(lines) / 2
+	label := "collecting..."
+	for i := range lines {
+		if i == mid {
+			lines[i] = padRight(label, width)
+			continue
+		}
+		lines[i] = strings.Repeat(" ", width)
+	}
+	return lines
 }
 
 func chartHeader(title string, current string, width int) string {
@@ -146,13 +206,6 @@ func recentEvents(events []lab.EventRecord, n int) []lab.EventRecord {
 		return events
 	}
 	return events[len(events)-n:]
-}
-
-func valuesOrZero(values []float64) []float64 {
-	if len(values) == 0 {
-		return []float64{0}
-	}
-	return values
 }
 
 func minMax(values []float64) (float64, float64) {
